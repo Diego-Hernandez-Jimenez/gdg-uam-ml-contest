@@ -1,0 +1,12 @@
+# training data: too large for git, downloaded from the GitHub release (see README)
+data/
+# local outputs
+results/
+__pycache__/
+
+# the rest of contest materials
+examples/
+colab.ipynb
+competition_api.py
+harness.py
+README_CONTEST.md
