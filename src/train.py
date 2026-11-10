@@ -14,6 +14,7 @@ from src.classifiers.base import ABSTAIN
 from src.classifiers.classifiers import DummyAbstainClassifier, RidgeClassifier
 from src.features.identity import IdentityFeatures
 from src.features.minirocket import MiniRocket
+from src.features.multirocket import MultiRocket
 from src.performance import (
     accuracy_all,
     accuracy_per_class,
@@ -59,6 +60,22 @@ def build_model(
                 RobustScale(),
             ],
             feature_extractor=MiniRocket(num_features=num_features),
+            classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
+            noise_threshold=noise_threshold,
+        ),
+        "multirocket_raw": lambda: TimeSeriesPipeline(
+            preprocessing_steps=[NaNInterpolation()],
+            feature_extractor=MultiRocket(num_features=num_features),
+            classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
+            noise_threshold=noise_threshold,
+        ),
+        "multirocket_robust": lambda: TimeSeriesPipeline(
+            preprocessing_steps=[
+                NaNInterpolation(),
+                HampelFilter(window=5, n_sigmas=3.0),
+                RobustScale(),
+            ],
+            feature_extractor=MultiRocket(num_features=num_features),
             classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
             noise_threshold=noise_threshold,
         ),
