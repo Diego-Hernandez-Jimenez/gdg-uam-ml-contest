@@ -10,8 +10,8 @@ from src.preprocessing.base import Step
 
 class TimeSeriesPipeline:
     """Composable end-to-end pipeline: Preprocessing -> Noise Gate -> Features -> Classifier.
-    
-    Designed to be fitted in batch mode (N, C, L) and serialized directly with joblib 
+
+    Designed to be fitted in batch mode (N, C, L) and serialized directly with joblib
     for low-latency single-sample inference (C, L).
     """
 
@@ -48,7 +48,9 @@ class TimeSeriesPipeline:
 
         # Single-sample fast path (competition inference)
         if is_single:
-            if self.noise_threshold is not None and self._is_noisy(X_clean, self.noise_threshold):
+            if self.noise_threshold is not None and self._is_noisy(
+                X_clean, self.noise_threshold
+            ):
                 return int(ABSTAIN)
             feats = self.feature_extractor.transform(X_clean)
             return int(self.classifier.predict(feats))

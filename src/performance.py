@@ -13,15 +13,17 @@ ALPHA = 0.5
 P_EXPONENT = 2
 
 
-def confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int = N_CLASSES) -> np.ndarray:
+def confusion_matrix(
+    y_true: np.ndarray, y_pred: np.ndarray, n_classes: int = N_CLASSES
+) -> np.ndarray:
     """Computes a confusion matrix including a column for abstentions.
-    
+
     Rows: True class (0 to n_classes-1).
     Columns: Predicted class (0 to n_classes-1) + the last column representing ABSTAIN (-1).
     """
     y_true = np.asarray(y_true, dtype=int)
     y_pred = np.asarray(y_pred, dtype=int)
-    
+
     cm = np.zeros((n_classes, n_classes + 1), dtype=np.int64)
     for t, p in zip(y_true, y_pred):
         col = n_classes if p == ABSTAIN else p
@@ -37,7 +39,9 @@ def accuracy_all(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(y_true == y_pred))
 
 
-def accuracy_per_class(y_true: np.ndarray, y_pred: np.ndarray, n_classes: int = N_CLASSES) -> list[float | None]:
+def accuracy_per_class(
+    y_true: np.ndarray, y_pred: np.ndarray, n_classes: int = N_CLASSES
+) -> list[float | None]:
     """Computes accuracy per class (treating ABSTAIN as incorrect)."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
@@ -58,17 +62,17 @@ def geomean_score(
     wrong_penalty: float = WRONG_PENALTY,
     epsilon: float = EPSILON,
     alpha: float = ALPHA,
-    p_exponent: int = P_EXPONENT
+    p_exponent: int = P_EXPONENT,
 ) -> float:
     """Computes the official competition geometric mean score.
-    
+
     Strictly follows the mathematical formulation:
         Score = (Product_{k=0}^{7} T_k) ** (1/8)
         T_k = max(epsilon, n_k**alpha * (c_k - lambda * w_k) / n_k * (c_k / n_k)**p)
     """
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
-    
+
     T_terms = []
     for k in range(n_classes):
         mask_k = y_true == k
@@ -76,20 +80,20 @@ def geomean_score(
         if n_k == 0:
             T_terms.append(epsilon)
             continue
-            
+
         preds_k = y_pred[mask_k]
         c_k = int(np.sum(preds_k == k))
         # Wrong answers are those that are neither correct (k) nor ABSTAIN (-1)
         w_k = int(np.sum((preds_k != k) & (preds_k != ABSTAIN)))
-        
+
         accuracy_term = (c_k - wrong_penalty * w_k) / n_k
         precision_term = (c_k / n_k) ** p_exponent
-        speed_term = n_k ** alpha
-        
+        speed_term = n_k**alpha
+
         term = speed_term * accuracy_term * precision_term
         T_k = max(epsilon, term)
         T_terms.append(T_k)
-        
+
     return float(np.prod(T_terms) ** (1.0 / n_classes))
 
 

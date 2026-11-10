@@ -8,7 +8,7 @@ from .base import ABSTAIN, Classifier
 
 class DummyAbstainClassifier(Classifier):
     """Trivial classifier that always predicts ABSTAIN (-1).
-    
+
     Useful as a baseline, fallback, or for pipeline smoke testing.
     """
 
@@ -20,22 +20,22 @@ class DummyAbstainClassifier(Classifier):
 
 class RidgeClassifier(Classifier):
     """Ridge classifier wrapper with built-in abstention logic.
-    
-    Uses scikit-learn's RidgeClassifierCV under the hood, which is the 
+
+    Uses scikit-learn's RidgeClassifierCV under the hood, which is the
     standard linear head for Rocket-family feature extractors.
     """
 
     def __init__(
         self,
-        alphas: np.ndarray | tuple[float, ...] = np.logspace(-3, 3, 10),
+        alphas: np.ndarray | tuple[float, ...] = np.logspace(-3, 3, 10),  # noqa: B008
         confidence_threshold: float | None = None,
     ):
         """Initialize the RidgeClassifier.
-        
+
         Args:
             alphas: Array of alpha values to try during cross-validation.
-            confidence_threshold: Minimum decision margin required to emit a 
-                class prediction. If the margin falls below this threshold, 
+            confidence_threshold: Minimum decision margin required to emit a
+                class prediction. If the margin falls below this threshold,
                 the classifier returns ABSTAIN (-1). If None, never abstains.
         """
         self.alphas = alphas
@@ -50,14 +50,14 @@ class RidgeClassifier(Classifier):
 
     def _should_abstain(self, scores: np.ndarray) -> np.ndarray:
         """Determine whether to abstain for each sample based on raw decision scores.
-        
-        Can be overridden or extended with custom abstention heuristics 
+
+        Can be overridden or extended with custom abstention heuristics
         (e.g., max score threshold, top-1 vs top-2 margin, or entropy).
-        
+
         Args:
-            scores: Output from decision_function of shape (N,) for binary 
+            scores: Output from decision_function of shape (N,) for binary
                     or (N, n_classes) for multiclass.
-                    
+
         Returns:
             Boolean mask of shape (N,) where True indicates ABSTAIN.
         """

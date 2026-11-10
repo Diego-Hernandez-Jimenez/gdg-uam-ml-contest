@@ -32,6 +32,7 @@ from src.preprocessing.steps import (
 # 1. MODEL PRESETS (Clean & explicit factory functions, no complex registry)
 # ==============================================================================
 
+
 def build_model(
     model_name: str,
     num_features: int = 10_000,
@@ -63,7 +64,9 @@ def build_model(
         ),
     }
     if model_name not in presets:
-        raise ValueError(f"Unknown model_name '{model_name}'. Available: {list(presets.keys())}")
+        raise ValueError(
+            f"Unknown model_name '{model_name}'. Available: {list(presets.keys())}"
+        )
     return presets[model_name]()
 
 
@@ -71,7 +74,10 @@ def build_model(
 # 2. METRICS COMPUTATION (Global accuracy, per-class accuracy, abstention stats)
 # ==============================================================================
 
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int = 8) -> dict:
+
+def compute_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray, num_classes: int = 8
+) -> dict:
     """Compute global metrics, official score, and per-class metrics."""
     total_samples = len(y_true)
     abstained_mask = y_pred == -1
@@ -80,7 +86,9 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int = 8
 
     # Accuracy on non-abstained (covered) samples
     if num_covered > 0:
-        accuracy_on_covered = float(np.mean(y_true[~abstained_mask] == y_pred[~abstained_mask]))
+        accuracy_on_covered = float(
+            np.mean(y_true[~abstained_mask] == y_pred[~abstained_mask])
+        )
     else:
         accuracy_on_covered = 0.0
 
@@ -92,34 +100,40 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int = 8
         class_total = int(np.sum(class_mask))
         if class_total == 0:
             continue
-        
+
         class_preds = y_pred[class_mask]
         class_abstained = int(np.sum(class_preds == -1))
-        
+
         per_class[str(c)] = {
             "total_samples": class_total,
             "abstained_samples": class_abstained,
             "abstention_rate": float(class_abstained / class_total),
-            "accuracy_all": float(per_class_acc[c]) if per_class_acc[c] is not None else 0.0,
+            "accuracy_all": float(per_class_acc[c])
+            if per_class_acc[c] is not None
+            else 0.0,
         }
 
     return {
         "total_samples": total_samples,
         "abstained_samples": num_abstained,
-        "abstention_rate": float(num_abstained / total_samples) if total_samples > 0 else 0.0,
+        "abstention_rate": float(num_abstained / total_samples)
+        if total_samples > 0
+        else 0.0,
         "coverage": float(num_covered / total_samples) if total_samples > 0 else 0.0,
         "global_accuracy_all": accuracy_all(y_true, y_pred),
         "accuracy_on_covered": accuracy_on_covered,
         "official_geomean_score": geomean_score(y_true, y_pred, n_classes=num_classes),
-        "confusion_matrix": confusion_matrix(y_true, y_pred, n_classes=num_classes).tolist(),
+        "confusion_matrix": confusion_matrix(
+            y_true, y_pred, n_classes=num_classes
+        ).tolist(),
         "per_class": per_class,
     }
-
 
 
 # ==============================================================================
 # 3. TRAINING & EVALUATION WORKFLOW (With or without Cross-Validation)
 # ==============================================================================
+
 
 def train_and_evaluate(
     X: np.ndarray,
@@ -176,7 +190,6 @@ def train_and_evaluate(
     joblib.dump(final_model, latest_model_path)
     joblib.dump(final_model, latest_default_path)
 
-
     # 4. Save metrics artifact (.json)
     metrics_payload = {
         "model_name": model_name,
@@ -201,24 +214,63 @@ def train_and_evaluate(
 # 4. CLI ENTRY POINT
 # ==============================================================================
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Train Time-Series Classification Pipeline.")
-    parser.add_argument("--data", type=str, required=True, help="Path to training .npz file (keys: X, y).")
-    parser.add_argument("--model-name", type=str, default="minirocket_robust", help="Model preset name.")
-    parser.add_argument("--cv-folds", type=int, default=5, help="Number of StratifiedKFold splits (0 or 1 to disable).")
-    parser.add_argument("--num-features", type=int, default=10_000, help="Number of Rocket features.")
-    parser.add_argument("--confidence-threshold", type=float, default=None, help="Classifier decision margin threshold.")
-    parser.add_argument("--noise-threshold", type=float, default=None, help="Residual noise std(diff) threshold.")
-    parser.add_argument("--artifacts-dir", type=str, default="artifacts", help="Output directory for artifacts.")
+    parser = argparse.ArgumentParser(
+        description="Train Time-Series Classification Pipeline."
+    )
+    parser.add_argument(
+        "--data",
+        type=str,
+        required=True,
+        help="Path to training .npz file (keys: X, y).",
+    )
+    parser.add_argument(
+        "--model-name", type=str, default="minirocket_robust", help="Model preset name."
+    )
+    parser.add_argument(
+        "--cv-folds",
+        type=int,
+        default=5,
+        help="Number of StratifiedKFold splits (0 or 1 to disable).",
+    )
+    parser.add_argument(
+        "--num-features", type=int, default=10_000, help="Number of Rocket features."
+    )
+    parser.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=None,
+        help="Classifier decision margin threshold.",
+    )
+    parser.add_argument(
+        "--noise-threshold",
+        type=float,
+        default=None,
+        help="Residual noise std(diff) threshold.",
+    )
+    parser.add_argument(
+        "--artifacts-dir",
+        type=str,
+        default="artifacts",
+        help="Output directory for artifacts.",
+    )
     args = parser.parse_args()
 
     with np.load(args.data) as loader:
         # Support both (X, y) and (series, labels) key conventions
-        x_key = "X" if "X" in loader.files else ("series" if "series" in loader.files else loader.files[0])
-        y_key = "y" if "y" in loader.files else ("labels" if "labels" in loader.files else loader.files[1])
+        x_key = (
+            "X"
+            if "X" in loader.files
+            else ("series" if "series" in loader.files else loader.files[0])
+        )
+        y_key = (
+            "y"
+            if "y" in loader.files
+            else ("labels" if "labels" in loader.files else loader.files[1])
+        )
         X = loader[x_key]
         y = loader[y_key]
-
 
     params_path, metrics_path = train_and_evaluate(
         X=X,
