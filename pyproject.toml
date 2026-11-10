@@ -7,9 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "numba>=0.68.1",
     "numpy>=2.5.4",
+    "scikit-learn>=1.9.1",
 ]
 
 [dependency-groups]
 dev = [
-    "scikit-learn>=1.9.1",
+    "pytest>=9.2.0",
 ]
