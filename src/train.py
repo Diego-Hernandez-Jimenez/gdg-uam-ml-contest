@@ -60,7 +60,7 @@ def build_model(
                 RobustScale(),
             ],
             feature_extractor=MiniRocket(num_features=num_features),
-            classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
+            classifier=RidgeClassifier(confidence_threshold=confidence_threshold, normalize_features=True),
             noise_threshold=noise_threshold,
         ),
         "multirocket_raw": lambda: TimeSeriesPipeline(
@@ -76,7 +76,7 @@ def build_model(
                 RobustScale(),
             ],
             feature_extractor=MultiRocket(num_features=num_features),
-            classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
+            classifier=RidgeClassifier(confidence_threshold=confidence_threshold, normalize_features=True),
             noise_threshold=noise_threshold,
         ),
     }
