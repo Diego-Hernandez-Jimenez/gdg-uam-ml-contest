@@ -11,7 +11,11 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold
 
 from src.classifiers.base import ABSTAIN
-from src.classifiers.classifiers import DummyAbstainClassifier, RidgeClassifier
+from src.classifiers.classifiers import (
+    DummyAbstainClassifier,
+    RidgeClassifier,
+    SGDLinearClassifier,
+)
 from src.features.identity import IdentityFeatures
 from src.features.minirocket import MiniRocket
 from src.features.multirocket import MultiRocket
@@ -63,20 +67,30 @@ def build_model(
             classifier=RidgeClassifier(confidence_threshold=confidence_threshold, normalize_features=True),
             noise_threshold=noise_threshold,
         ),
+         "minirocket_sgd": lambda: TimeSeriesPipeline(
+            preprocessing_steps=[
+                NaNInterpolation(),
+                HampelFilter(window=5, n_sigmas=3.0),
+                RobustScale(),
+            ],
+            feature_extractor=MiniRocket(num_features=num_features),
+            classifier=SGDLinearClassifier(confidence_threshold=confidence_threshold),
+            noise_threshold=noise_threshold,
+        ),
         "multirocket_raw": lambda: TimeSeriesPipeline(
             preprocessing_steps=[NaNInterpolation()],
             feature_extractor=MultiRocket(num_features=num_features),
-            classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
+            classifier=SGDLinearClassifier(confidence_threshold=confidence_threshold),
             noise_threshold=noise_threshold,
         ),
-        "multirocket_robust": lambda: TimeSeriesPipeline(
+        "multirocket_sgd": lambda: TimeSeriesPipeline(
             preprocessing_steps=[
                 NaNInterpolation(),
                 HampelFilter(window=5, n_sigmas=3.0),
                 RobustScale(),
             ],
             feature_extractor=MultiRocket(num_features=num_features),
-            classifier=RidgeClassifier(confidence_threshold=confidence_threshold, normalize_features=True),
+            classifier=SGDLinearClassifier(confidence_threshold=confidence_threshold),
             noise_threshold=noise_threshold,
         ),
     }

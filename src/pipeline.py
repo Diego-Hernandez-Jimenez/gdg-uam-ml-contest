@@ -34,12 +34,65 @@ class TimeSeriesPipeline:
         max_channel_noise = np.max(np.std(diffs, axis=-1), axis=-1)
         return max_channel_noise > threshold
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> TimeSeriesPipeline:
-        """Fit pipeline on a batch of series X of shape (N, C, L)."""
-        X_clean = self.preprocessing.fit(X).transform(X)
-        X_feats = self.feature_extractor.fit(X_clean).transform(X_clean)
-        self.classifier.fit(X_feats, y)
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        batch_size: int | None = None,
+        n_epochs: int = 3,
+    ) -> TimeSeriesPipeline:
+        """Fit pipeline in full-batch mode or memory-safe mini-batch mode."""
+        n_samples = X.shape[0]
+
+        # Standard full-batch in-memory path
+        if batch_size is None or n_samples <= batch_size:
+            X_clean = self.preprocessing.fit(X).transform(X)
+            X_feats = self.feature_extractor.fit(X_clean).transform(X_clean)
+            self.classifier.fit(X_feats, y)
+            return self
+
+        # Memory-safe mini-batch path
+        rng = np.random.default_rng(42)
+        classes = np.unique(y)
+
+        # 1. Fit feature extractor on a representative subset
+        subset_idx = rng.choice(n_samples, size=min(batch_size, n_samples), replace=False)
+        X_sub_clean = self.preprocessing.fit(X[subset_idx]).transform(X[subset_idx])
+        self.feature_extractor.fit(X_sub_clean)
+        del X_sub_clean
+
+        # 2. If classifier supports incremental learning (SGDLinearClassifier)
+        if hasattr(self.classifier, "partial_fit_scaler") and hasattr(self.classifier, "partial_fit_model"):
+            # Pass 1: Compute exact global mean & std across mini-batches (No Leakage)
+            for start in range(0, n_samples, batch_size):
+                end = min(start + batch_size, n_samples)
+                X_b = self.preprocessing.transform(X[start:end])
+                feats_b = self.feature_extractor.transform(X_b)
+                self.classifier.partial_fit_scaler(feats_b)
+
+            # Pass 2..N: Train SGD classifier over shuffled mini-batches
+            for _ in range(n_epochs):
+                perm = rng.permutation(n_samples)
+                for start in range(0, n_samples, batch_size):
+                    idx = perm[start : min(start + batch_size, n_samples)]
+                    X_b = self.preprocessing.transform(X[idx])
+                    feats_b = self.feature_extractor.transform(X_b)
+                    self.classifier.partial_fit_model(feats_b, y[idx], classes=classes)
+            return self
+
+        # 3. Fallback for RidgeClassifier: extract features in chunks to save preprocessing RAM
+        first_feats = self.feature_extractor.transform(self.preprocessing.transform(X[:1]))
+        n_features = first_feats.shape[1]
+        X_feats_all = np.empty((n_samples, n_features), dtype=np.float32)
+
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            X_b = self.preprocessing.transform(X[start:end])
+            X_feats_all[start:end] = self.feature_extractor.transform(X_b)
+
+        self.classifier.fit(X_feats_all, y)
         return self
+
 
     def predict(self, X: np.ndarray) -> int | np.ndarray:
         """Predict on a single sample (C, L) or a batch (N, C, L)."""
