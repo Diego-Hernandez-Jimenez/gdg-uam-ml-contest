@@ -3,6 +3,7 @@ data/
 # local outputs
 results/
 __pycache__/
+artifacts/
 
 # the rest of contest materials
 examples/
