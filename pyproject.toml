@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numba>=0.68.1",
     "numpy>=2.5.4",
+    "pyyaml>=6.0.3",
     "scikit-learn>=1.9.1",
 ]
 

@@ -28,7 +28,7 @@ test target_test="":
     set -e
     trap 'rm -rf .pytest_cache' EXIT
     if [ -n "{{target_test}}" ]; then
-        uv run --project {{root}} pytest -vv "{{target_test}}"
+        uv run --project {{root}} pytest -vv "test/{{target_test}}.py"
     else
         uv run --project {{root}} pytest -vv
     fi
