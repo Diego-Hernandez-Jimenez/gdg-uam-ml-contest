@@ -50,7 +50,7 @@ class RidgeClassifier(Classifier):
 
         # 1. Fit and transform scaler strictly on the training set
         if self.normalize_features:
-            self.scaler_ = StandardScaler(copy=False)
+            self.scaler_ = StandardScaler(with_mean=False, copy=False)
             X_train = self.scaler_.fit_transform(X_in)
         else:
             self.scaler_ = None
@@ -152,7 +152,7 @@ class SGDLinearClassifier(Classifier):
         X_in = np.asarray(X, dtype=np.float32)
 
         if self.normalize_features:
-            self.scaler_ = StandardScaler(copy=False)
+            self.scaler_ = StandardScaler(with_mean=False, copy=False)
             X_train = self.scaler_.fit_transform(X_in)
         else:
             self.scaler_ = None
@@ -162,6 +162,8 @@ class SGDLinearClassifier(Classifier):
             loss=self.loss,
             penalty="l2",
             alpha=self.alpha,
+            early_stopping=True,
+            validation_fraction=0.2,
             max_iter=self.max_iter,
             random_state=self.random_state,
             n_jobs=-1,
@@ -174,7 +176,7 @@ class SGDLinearClassifier(Classifier):
         if not self.normalize_features:
             return
         if self.scaler_ is None:
-            self.scaler_ = StandardScaler()
+            self.scaler_ = StandardScaler(with_mean=False)
         self.scaler_.partial_fit(np.asarray(X_batch, dtype=np.float32))
 
     def partial_fit_model(
