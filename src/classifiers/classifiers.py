@@ -57,7 +57,7 @@ class RidgeClassifier(Classifier):
             X_train = X_in
 
         # 2. Fit RidgeClassifierCV on the standardized training features
-        self.model_ = RidgeClassifierCV(alphas=self.alphas)
+        self.model_ = RidgeClassifierCV(alphas=self.alphas, class_weight="balanced", scoring="f1_weighted")
         self.model_.fit(X_train, y)
         return self
 
