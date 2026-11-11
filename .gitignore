@@ -5,6 +5,7 @@ results/
 __pycache__/
 artifacts/
 configs/experiments/
+scripts/
 
 # the rest of contest materials
 examples/

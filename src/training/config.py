@@ -11,9 +11,12 @@ from src.classifiers.classifiers import (
     RidgeClassifier,
     SGDLinearClassifier,
 )
+from src.features.base import FeatureExtractor, FeatureUnion
+from src.features.baseline_features import BaselineFeaturesExtractor
 from src.features.identity import IdentityFeatures
 from src.features.minirocket import MiniRocket
 from src.features.multirocket import MultiRocket
+from src.features.summary_stats import SummaryStatsExtractor
 from src.preprocessing.steps import (
     HampelFilter,
     Identity,
@@ -33,6 +36,8 @@ FEATURE_MAP: dict[str, type] = {
     "identity": IdentityFeatures,
     "minirocket": MiniRocket,
     "multirocket": MultiRocket,
+    "summary_stats": SummaryStatsExtractor,
+    "baseline": BaselineFeaturesExtractor,
 }
 
 CLASSIFIER_MAP: dict[str, type] = {
@@ -50,7 +55,7 @@ class TrainConfig:
     preprocessing: list[str | dict[str, Any]] = field(
         default_factory=lambda: ["nan_interpolation"]
     )
-    feature_extractor: str = "minirocket"
+    feature_extractor: str | list[str | dict[str, Any]] = "minirocket"
     num_features: int = 10_000
     classifier: str = "ridge"
     confidence_threshold: float | None = None
@@ -82,8 +87,28 @@ class TrainConfig:
         return asdict(self)
 
 
+def _instantiate_single_extractor(
+    spec: str | dict[str, Any], default_num_features: int
+) -> FeatureExtractor:
+    """Helper to instantiate a single FeatureExtractor from string or dict spec."""
+    if isinstance(spec, str):
+        name, params = spec, {}
+    elif isinstance(spec, dict):
+        name, params = next(iter(spec.items()))
+        params = params or {}
+    else:
+        raise TypeError(f"Invalid feature extractor specification: {spec}")
+
+    fe_cls = FEATURE_MAP[name]
+    if name in ("minirocket", "multirocket") and "num_features" not in params:
+        params["num_features"] = default_num_features
+
+    return fe_cls(**params)
+
+
 def build_pipeline(config: TrainConfig) -> TimeSeriesPipeline:
     """Instantiate a TimeSeriesPipeline from a TrainConfig contract."""
+    # 1. Build Preprocessing Steps
     steps = []
     for step in config.preprocessing:
         if isinstance(step, str):
@@ -92,23 +117,44 @@ def build_pipeline(config: TrainConfig) -> TimeSeriesPipeline:
             name, params = next(iter(step.items()))
             steps.append(PREPROCESSING_MAP[name](**(params or {})))
 
-    fe_cls = FEATURE_MAP[config.feature_extractor]
-    feature_extractor = (
-        fe_cls()
-        if config.feature_extractor == "identity"
-        else fe_cls(num_features=config.num_features)
+    # 2. Build Feature Extractor (Single or FeatureUnion if length > 1)
+    fe_specs = (
+        [config.feature_extractor]
+        if isinstance(config.feature_extractor, str)
+        else config.feature_extractor
     )
+    extractors = [
+        _instantiate_single_extractor(spec, config.num_features)
+        for spec in fe_specs
+    ]
 
+    if len(extractors) > 1:
+        feature_extractor: FeatureExtractor = FeatureUnion(
+            extractors=extractors,
+            scale_features=config.normalize_features,
+        )
+    else:
+        feature_extractor = extractors[0]
+
+    # 3. Build Classifier
     clf_cls = CLASSIFIER_MAP[config.classifier]
     if config.classifier == "dummy":
         classifier = clf_cls()
     elif config.classifier == "ridge":
         classifier = clf_cls(
             confidence_threshold=config.confidence_threshold,
-            normalize_features=config.normalize_features,
+            # Avoid double scaling if FeatureUnion already scaled the features
+            normalize_features=(
+                config.normalize_features and len(extractors) == 1
+            ),
         )
     else:
-        classifier = clf_cls(confidence_threshold=config.confidence_threshold)
+        classifier = clf_cls(
+            confidence_threshold=config.confidence_threshold,
+            normalize_features=(
+                config.normalize_features and len(extractors) == 1
+            ),
+        )
 
     return TimeSeriesPipeline(
         preprocessing_steps=steps,

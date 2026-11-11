@@ -2,9 +2,11 @@ import numpy as np
 import pytest
 
 # Absolute imports from the project root structure
+from src.features.base import FeatureUnion
 from src.features.identity import IdentityFeatures
 from src.features.minirocket import MiniRocket
 from src.features.multirocket import MultiRocket
+from src.features.summary_stats import SummaryStatsExtractor
 
 
 @pytest.fixture
@@ -43,6 +45,26 @@ def test_identity_features_streaming(streaming_synthetic_sample):
     # Expected output: (4 * 256,) = (1024,)
     assert features.shape == (1024,)
     np.testing.assert_array_equal(features, streaming_synthetic_sample.flatten())
+
+
+# ==============================================================================
+# TESTS FOR SUMMARY STATS EXTRACTOR
+# ==============================================================================
+
+def test_summary_stats_batch_and_streaming(batch_synthetic_data):
+    """Validates SummaryStatsExtractor shapes and consistency between batch and streaming."""
+    extractor = SummaryStatsExtractor()
+    
+    # 1. Batch mode: (N=3, C=4, L=256) -> (3, 3 * 4) = (3, 12)
+    batch_feats = extractor.fit(batch_synthetic_data).transform(batch_synthetic_data)
+    assert batch_feats.shape == (3, 12)
+    assert not np.isnan(batch_feats).any()
+    assert (batch_feats >= 0).all()  # RMS, IQR, and variance are strictly non-negative
+
+    # 2. Streaming mode on the first sample of the batch: (C=4, L=256) -> (12,)
+    single_feats = extractor.transform(batch_synthetic_data[0])
+    assert single_feats.shape == (12,)
+    np.testing.assert_allclose(batch_feats[0], single_feats, rtol=1e-5)
 
 
 # ==============================================================================
@@ -100,3 +122,60 @@ def test_rocket_not_fitted_raises(streaming_synthetic_sample, extractor_class):
     extractor = extractor_class(num_features=500)
     with pytest.raises(ValueError, match=f"{extractor_class.__name__} must be fitted before transforming."):
         extractor.transform(streaming_synthetic_sample)
+
+
+# ==============================================================================
+# TESTS FOR FEATURE UNION (CONCATENATION & NORMALIZATION)
+# ==============================================================================
+
+def test_feature_union_unscaled(batch_synthetic_data):
+    """Validates FeatureUnion concatenation in batch and streaming modes without scaling."""
+    rocket = MiniRocket(num_features=500, max_dilations_per_kernel=32)
+    stats = SummaryStatsExtractor()
+    union = FeatureUnion(extractors=[rocket, stats], scale_features=False)
+
+    union.fit(batch_synthetic_data)
+    batch_out = union.transform(batch_synthetic_data)
+
+    expected_rocket_dim = rocket.parameters_[4].shape[0]
+    expected_total_dim = expected_rocket_dim + 12
+
+    # 1. Validate concatenated batch shape
+    assert batch_out.shape == (3, expected_total_dim)
+
+    # 2. Verify exact match of the summary stats slice at the end of the feature vector
+    direct_stats = stats.transform(batch_synthetic_data)
+    np.testing.assert_allclose(batch_out[:, -12:], direct_stats, rtol=1e-5)
+
+    # 3. Validate streaming mode (1D output) and consistency with batch[0]
+    single_out = union.transform(batch_synthetic_data[0])
+    assert single_out.shape == (expected_total_dim,)
+    np.testing.assert_allclose(batch_out[0], single_out, rtol=1e-5)
+
+
+def test_feature_union_scaled(batch_synthetic_data):
+    """Validates that FeatureUnion properly standardizes concatenated features."""
+    rocket = MiniRocket(num_features=500, max_dilations_per_kernel=32)
+    stats = SummaryStatsExtractor()
+    union = FeatureUnion(extractors=[rocket, stats], scale_features=True)
+
+    union.fit(batch_synthetic_data)
+    batch_out = union.transform(batch_synthetic_data)
+
+    assert union.mean_ is not None
+    assert union.std_ is not None
+    assert not np.isnan(batch_out).any()
+
+    # Non-constant features across the training batch must have zero mean and unit variance
+    non_const_mask = np.std(batch_out, axis=0) > 1e-6
+    assert non_const_mask.any()
+    np.testing.assert_allclose(
+        np.mean(batch_out[:, non_const_mask], axis=0), 0.0, atol=1e-4
+    )
+    np.testing.assert_allclose(
+        np.std(batch_out[:, non_const_mask], axis=0), 1.0, atol=1e-4
+    )
+
+    # Streaming mode must apply the exact same frozen mean_ and std_
+    single_out = union.transform(batch_synthetic_data[0])
+    np.testing.assert_allclose(batch_out[0], single_out, rtol=1e-5)
