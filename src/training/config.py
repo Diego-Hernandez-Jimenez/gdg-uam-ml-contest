@@ -8,6 +8,7 @@ import yaml
 
 from src.classifiers.classifiers import (
     DummyAbstainClassifier,
+    IncrementalRidgeClassifier,
     RidgeClassifier,
     SGDLinearClassifier,
 )
@@ -43,6 +44,7 @@ FEATURE_MAP: dict[str, type] = {
 CLASSIFIER_MAP: dict[str, type] = {
     "dummy": DummyAbstainClassifier,
     "ridge": RidgeClassifier,
+    "incremental_ridge": IncrementalRidgeClassifier,
     "sgd": SGDLinearClassifier,
 }
 
@@ -56,7 +58,7 @@ class TrainConfig:
         default_factory=lambda: ["nan_interpolation"]
     )
     feature_extractor: str | list[str | dict[str, Any]] = "minirocket"
-    num_features: int = 10_000
+    num_features: int = 1000
     classifier: str = "ridge"
     confidence_threshold: float | None = None
     normalize_features: bool = False
@@ -67,13 +69,13 @@ class TrainConfig:
     artifacts_dir: str = "artifacts"
 
     def __post_init__(self) -> None:
-        # Validate SGD-exclusive training parameters
-        if self.classifier != "sgd" and (
+        if self.classifier not in ("sgd", "incremental_ridge", "ridge") and (
             self.batch_size is not None or self.epochs != 3
         ):
             raise ValueError(
-                "batch_size and epochs are only valid with classifier 'sgd'."
+                "batch_size and epochs are only valid with 'sgd', 'ridge', or 'incremental_ridge'."
             )
+
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> TrainConfig:

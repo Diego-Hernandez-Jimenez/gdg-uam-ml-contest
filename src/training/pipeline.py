@@ -61,24 +61,30 @@ class TimeSeriesPipeline:
         self.feature_extractor.fit(X_sub_clean)
         del X_sub_clean
 
-        # 2. If classifier supports incremental learning (SGDLinearClassifier)
+        # 2. If classifier supports incremental learning (SGD or IncrementalRidgeClassifier)
         if hasattr(self.classifier, "partial_fit_scaler") and hasattr(self.classifier, "partial_fit_model"):
-            # Pass 1: Compute exact global mean & std across mini-batches (No Leakage)
-            for start in range(0, n_samples, batch_size):
-                end = min(start + batch_size, n_samples)
-                X_b = self.preprocessing.transform(X[start:end])
-                feats_b = self.feature_extractor.transform(X_b)
-                self.classifier.partial_fit_scaler(feats_b)
+            # Pass 1: Compute exact global mean & std across mini-batches (if normalize_features=True)
+            if getattr(self.classifier, "normalize_features", False):
+                for start in range(0, n_samples, batch_size):
+                    end = min(start + batch_size, n_samples)
+                    X_b = self.preprocessing.transform(X[start:end])
+                    feats_b = self.feature_extractor.transform(X_b)
+                    self.classifier.partial_fit_scaler(feats_b)
 
-            # Pass 2..N: Train SGD classifier over shuffled mini-batches
-            for _ in range(n_epochs):
+            # Pass 2: Single pass for exact closed-form solvers (IncrementalRidge), or n_epochs for SGD
+            effective_epochs = 1 if hasattr(self.classifier, "finalize_fit") else n_epochs
+            for _ in range(effective_epochs):
                 perm = rng.permutation(n_samples)
                 for start in range(0, n_samples, batch_size):
                     idx = perm[start : min(start + batch_size, n_samples)]
                     X_b = self.preprocessing.transform(X[idx])
                     feats_b = self.feature_extractor.transform(X_b)
                     self.classifier.partial_fit_model(feats_b, y[idx], classes=classes)
+
+            if hasattr(self.classifier, "finalize_fit"):
+                self.classifier.finalize_fit()
             return self
+
 
         # 3. Fallback for RidgeClassifier: extract features in chunks to save preprocessing RAM
         first_feats = self.feature_extractor.transform(self.preprocessing.transform(X[:1]))
