@@ -1,0 +1,15 @@
+name: minirocket2k_robust
+preprocessing:
+  - nan_interpolation
+  - hampel:
+      window: 5
+      n_sigmas: 3.0
+  - robust_scale
+feature_extractor: minirocket
+num_features: 2000
+classifier: ridge
+confidence_threshold: null
+normalize_features: false
+noise_threshold: 5
+cv_folds: null
+artifacts_dir: artifacts

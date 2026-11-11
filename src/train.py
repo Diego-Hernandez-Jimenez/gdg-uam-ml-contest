@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -11,98 +10,16 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold
 
 from src.classifiers.base import ABSTAIN
-from src.classifiers.classifiers import (
-    DummyAbstainClassifier,
-    RidgeClassifier,
-    SGDLinearClassifier,
-)
-from src.features.identity import IdentityFeatures
-from src.features.minirocket import MiniRocket
-from src.features.multirocket import MultiRocket
-from src.performance import (
+from src.training.config import TrainConfig, build_pipeline
+from src.training.performance import (
     accuracy_all,
     accuracy_per_class,
     confusion_matrix,
     geomean_score,
 )
-from src.pipeline import TimeSeriesPipeline
-from src.preprocessing.steps import (
-    HampelFilter,
-    Identity,
-    NaNInterpolation,
-    RobustScale,
-)
 
 # ==============================================================================
-# 1. MODEL PRESETS (Clean & explicit factory functions, no complex registry)
-# ==============================================================================
-
-
-def build_model(
-    model_name: str,
-    num_features: int = 10_000,
-    confidence_threshold: float | None = None,
-    noise_threshold: float | None = None,
-) -> TimeSeriesPipeline:
-    """Build a TimeSeriesPipeline instance by preset name and hyperparameters."""
-    presets: dict[str, Callable[[], TimeSeriesPipeline]] = {
-        "dummy": lambda: TimeSeriesPipeline(
-            preprocessing_steps=[Identity()],
-            feature_extractor=IdentityFeatures(),
-            classifier=DummyAbstainClassifier(),
-        ),
-        "minirocket_raw": lambda: TimeSeriesPipeline(
-            preprocessing_steps=[NaNInterpolation()],
-            feature_extractor=MiniRocket(num_features=num_features),
-            classifier=RidgeClassifier(confidence_threshold=confidence_threshold),
-            noise_threshold=noise_threshold,
-        ),
-        "minirocket_robust": lambda: TimeSeriesPipeline(
-            preprocessing_steps=[
-                NaNInterpolation(),
-                HampelFilter(window=5, n_sigmas=3.0),
-                RobustScale(),
-            ],
-            feature_extractor=MiniRocket(num_features=num_features),
-            classifier=RidgeClassifier(confidence_threshold=confidence_threshold, normalize_features=True),
-            noise_threshold=noise_threshold,
-        ),
-         "minirocket_sgd": lambda: TimeSeriesPipeline(
-            preprocessing_steps=[
-                NaNInterpolation(),
-                HampelFilter(window=5, n_sigmas=3.0),
-                RobustScale(),
-            ],
-            feature_extractor=MiniRocket(num_features=num_features),
-            classifier=SGDLinearClassifier(confidence_threshold=confidence_threshold),
-            noise_threshold=noise_threshold,
-        ),
-        "multirocket_raw": lambda: TimeSeriesPipeline(
-            preprocessing_steps=[NaNInterpolation()],
-            feature_extractor=MultiRocket(num_features=num_features),
-            classifier=SGDLinearClassifier(confidence_threshold=confidence_threshold),
-            noise_threshold=noise_threshold,
-        ),
-        "multirocket_sgd": lambda: TimeSeriesPipeline(
-            preprocessing_steps=[
-                NaNInterpolation(),
-                HampelFilter(window=5, n_sigmas=3.0),
-                RobustScale(),
-            ],
-            feature_extractor=MultiRocket(num_features=num_features),
-            classifier=SGDLinearClassifier(confidence_threshold=confidence_threshold),
-            noise_threshold=noise_threshold,
-        ),
-    }
-    if model_name not in presets:
-        raise ValueError(
-            f"Unknown model_name '{model_name}'. Available: {list(presets.keys())}"
-        )
-    return presets[model_name]()
-
-
-# ==============================================================================
-# 2. METRICS COMPUTATION (Global accuracy, per-class accuracy, abstention stats)
+# 1. METRICS COMPUTATION (Global accuracy, per-class accuracy, abstention stats)
 # ==============================================================================
 
 
@@ -162,59 +79,49 @@ def compute_metrics(
 
 
 # ==============================================================================
-# 3. TRAINING & EVALUATION WORKFLOW (With or without Cross-Validation)
+# 2. TRAINING & EVALUATION WORKFLOW (With or without Cross-Validation)
 # ==============================================================================
 
 
 def train_and_evaluate(
     X: np.ndarray,
     y: np.ndarray,
-    model_name: str,
-    cv_folds: int = 0,
-    num_features: int = 10_000,
-    confidence_threshold: float | None = None,
-    noise_threshold: float | None = None,
-    artifacts_dir: str | Path = "artifacts",
+    config: TrainConfig,
 ) -> tuple[Path, Path]:
     """Run optional CV evaluation, fit final model on full data, and export artifacts."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    artifacts_path = Path(artifacts_dir)
+    artifacts_path = Path(config.artifacts_dir)
     metrics_dir = artifacts_path / "metrics"
     artifacts_path.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Cross-Validation (if cv_folds > 1) using Out-Of-Fold predictions
     cv_metrics = None
-    if cv_folds and cv_folds > 1:
-        skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+    if config.cv_folds and config.cv_folds > 1:
+        skf = StratifiedKFold(n_splits=config.cv_folds, shuffle=True, random_state=42)
         oof_preds = np.full(len(y), ABSTAIN, dtype=int)
 
         for train_idx, val_idx in skf.split(X, y):
-            fold_model = build_model(
-                model_name=model_name,
-                num_features=num_features,
-                confidence_threshold=confidence_threshold,
-                noise_threshold=noise_threshold,
+            fold_model = build_pipeline(config)
+            fold_model.fit(
+                X[train_idx],
+                y[train_idx],
+                batch_size=config.batch_size,
+                n_epochs=config.epochs,
             )
-            fold_model.fit(X[train_idx], y[train_idx])
             oof_preds[val_idx] = fold_model.predict(X[val_idx])
 
         cv_metrics = compute_metrics(y, oof_preds)
 
     # 2. Fit final model on 100% of the dataset
-    final_model = build_model(
-        model_name=model_name,
-        num_features=num_features,
-        confidence_threshold=confidence_threshold,
-        noise_threshold=noise_threshold,
-    )
-    final_model.fit(X, y)
+    final_model = build_pipeline(config)
+    final_model.fit(X, y, batch_size=config.batch_size, n_epochs=config.epochs)
     train_preds = final_model.predict(X)
     train_metrics = compute_metrics(y, train_preds)
 
     # 3. Save model artifacts (.joblib)
-    params_path = artifacts_path / f"params_{model_name}_{timestamp}.joblib"
-    latest_model_path = artifacts_path / f"latest_{model_name}.joblib"
+    params_path = artifacts_path / f"params_{config.name}_{timestamp}.joblib"
+    latest_model_path = artifacts_path / f"latest_{config.name}.joblib"
     latest_default_path = artifacts_path / "latest.joblib"
 
     joblib.dump(final_model, params_path)
@@ -223,18 +130,13 @@ def train_and_evaluate(
 
     # 4. Save metrics artifact (.json)
     metrics_payload = {
-        "model_name": model_name,
+        "model_name": config.name,
         "timestamp": timestamp,
-        "config": {
-            "cv_folds": cv_folds,
-            "num_features": num_features,
-            "confidence_threshold": confidence_threshold,
-            "noise_threshold": noise_threshold,
-        },
+        "config": config.to_dict(),
         "train_metrics": train_metrics,
         "cv_oof_metrics": cv_metrics,
     }
-    metrics_path = metrics_dir / f"metrics_{model_name}_{timestamp}.json"
+    metrics_path = metrics_dir / f"metrics_{config.name}_{timestamp}.json"
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(metrics_payload, f, indent=2)
 
@@ -242,7 +144,7 @@ def train_and_evaluate(
 
 
 # ==============================================================================
-# 4. CLI ENTRY POINT
+# 3. CLI ENTRY POINT
 # ==============================================================================
 
 
@@ -257,36 +159,14 @@ def main():
         help="Path to training .npz file (keys: X, y).",
     )
     parser.add_argument(
-        "--model-name", type=str, default="minirocket_robust", help="Model preset name."
-    )
-    parser.add_argument(
-        "--cv-folds",
-        type=int,
-        default=5,
-        help="Number of StratifiedKFold splits (0 or 1 to disable).",
-    )
-    parser.add_argument(
-        "--num-features", type=int, default=10_000, help="Number of Rocket features."
-    )
-    parser.add_argument(
-        "--confidence-threshold",
-        type=float,
-        default=None,
-        help="Classifier decision margin threshold.",
-    )
-    parser.add_argument(
-        "--noise-threshold",
-        type=float,
-        default=None,
-        help="Residual noise std(diff) threshold.",
-    )
-    parser.add_argument(
-        "--artifacts-dir",
+        "--config",
         type=str,
-        default="artifacts",
-        help="Output directory for artifacts.",
+        required=True,
+        help="Path to YAML configuration file.",
     )
     args = parser.parse_args()
+
+    config = TrainConfig.from_yaml(args.config)
 
     with np.load(args.data) as loader:
         # Support both (X, y) and (series, labels) key conventions
@@ -303,16 +183,7 @@ def main():
         X = loader[x_key]
         y = loader[y_key]
 
-    params_path, metrics_path = train_and_evaluate(
-        X=X,
-        y=y,
-        model_name=args.model_name,
-        cv_folds=args.cv_folds,
-        num_features=args.num_features,
-        confidence_threshold=args.confidence_threshold,
-        noise_threshold=args.noise_threshold,
-        artifacts_dir=args.artifacts_dir,
-    )
+    params_path, metrics_path = train_and_evaluate(X=X, y=y, config=config)
     print(f"Saved model parameters to: {params_path}")
     print(f"Saved evaluation metrics to: {metrics_path}")
 

@@ -1,0 +1,17 @@
+name: multirocket1k_robust
+preprocessing:
+  - nan_interpolation
+  - hampel:
+      window: 5
+      n_sigmas: 3.0
+  - robust_scale
+feature_extractor: multirocket
+num_features: 1000
+classifier: sgd
+confidence_threshold: null
+normalize_features: false
+noise_threshold: null
+cv_folds: null
+batch_size: 256
+epochs: 3
+artifacts_dir: artifacts

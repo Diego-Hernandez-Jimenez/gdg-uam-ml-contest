@@ -1,0 +1,17 @@
+name: minirocket2k_sgd
+preprocessing:
+  - nan_interpolation
+  - hampel:
+      window: 5
+      n_sigmas: 3.0
+  - robust_scale
+feature_extractor: minirocket
+num_features: 2000
+classifier: sgd
+confidence_threshold: null
+normalize_features: false
+noise_threshold: 5
+cv_folds: null
+batch_size: 768
+epochs: 100
+artifacts_dir: artifacts
