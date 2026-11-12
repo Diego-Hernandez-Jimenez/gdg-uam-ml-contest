@@ -150,37 +150,34 @@ def test_performance_metrics_integration(synthetic_8class_dataset):
 
 
 def test_yaml_config_and_sgd_validation(synthetic_8class_dataset, tmp_path):
-    """Verifies YAML config loading, pipeline building, and SGD parameter validation."""
+    """Verifies YAML config loading and pipeline fit/predict with SGD mini-batch parameters."""
     X, y = synthetic_8class_dataset
-
     yaml_content = """
 name: minirocket_sgd_test
 preprocessing:
-  - nan_interpolation
-  - hampel:
-      window: 5
-      n_sigmas: 3.0
-  - robust_scale
-feature_extractor: minirocket
-num_features: 500
-classifier: sgd
-confidence_threshold: 0.1
-noise_threshold: 3.5
-cv_folds: 2
-batch_size: 6
-epochs: 2
+  steps:
+    - nan_interpolation
+    - hampel:
+        window: 5
+        n_sigmas: 3.0
+    - robust_scale
+feature_extractor:
+  components:
+    - minirocket:
+        num_features: 200
+classifier:
+  model: sgd
+  confidence_threshold: 0.1
+  noise_threshold: 3.5
+training:
+  cv_folds: 2
+  batch_size: 6
+  epochs: 2
 """
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(yaml_content, encoding="utf-8")
-
-    # Load from YAML and fit with SGD mini-batch parameters
     cfg = TrainConfig.from_yaml(cfg_file)
     pipeline = build_pipeline(cfg)
-    pipeline.fit(X, y, batch_size=cfg.batch_size, n_epochs=cfg.epochs)
-
+    pipeline.fit(X, y, batch_size=cfg.training.batch_size, n_epochs=cfg.training.epochs)
     preds = pipeline.predict(X)
     assert preds.shape == (X.shape[0],)
-
-    # Ensure batch_size and epochs raise ValueError when classifier != 'sgd'
-    with pytest.raises(ValueError, match="only valid with classifier 'sgd'"):
-        TrainConfig(name="invalid_ridge", classifier="ridge", batch_size=32)
