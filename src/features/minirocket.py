@@ -293,18 +293,45 @@ _SIG = "float32[:,:](float32[:,:,:],Tuple((int32[:],int32[:],int32[:],int32[:],f
 _transform = njit(_SIG, fastmath=True, parallel=True, cache=True)(_transform_core)
 _transform_single = njit(_SIG, fastmath=True, parallel=False, cache=True)(_transform_core)
 
-
 class MiniRocket(FeatureExtractor):
     """MiniRocket feature extractor wrapped in the standard FeatureExtractor contract."""
 
-    def __init__(self, num_features: int = 10_000, max_dilations_per_kernel: int = 32):
+    def __init__(
+        self,
+        num_features: int = 1000,
+        max_dilations_per_kernel: int = 32,
+        scale_input: bool = True,
+    ):
         self.num_features = num_features
         self.max_dilations_per_kernel = max_dilations_per_kernel
+        self.scale_input = scale_input
         self.parameters_ = None
+
+    @staticmethod
+    def _robust_scale(X: np.ndarray) -> np.ndarray:
+        """Robust fast scaling by sample and channel (axis=-1).
+        Supports 3D input (N, C, L) in float32.
+        """
+        L = X.shape[-1]
+        if L == 256:
+            # Exact optimization O(L log L) with a single sort pass for L=256
+            s = np.sort(X, axis=-1)
+            med = 0.5 * (s[:, :, 127:128] + s[:, :, 128:129])
+            q25 = 0.25 * s[:, :, 63:64] + 0.75 * s[:, :, 64:65]
+            q75 = 0.75 * s[:, :, 191:192] + 0.25 * s[:, :, 192:193]
+        else:
+            q25, med, q75 = np.percentile(X, [25, 50, 75], axis=-1, keepdims=True)
+
+        iqr = q75 - q25
+        return np.ascontiguousarray(
+            (X - med) / np.where(iqr < 1e-8, 1.0, iqr), dtype=np.float32
+        )
 
     def fit(self, X: np.ndarray) -> MiniRocket:
         # MiniRocket works with 3D Float32 arrays (N, C, L)
         X_f32 = X.astype(np.float32, copy=False)
+        if self.scale_input:
+            X_f32 = self._robust_scale(X_f32)
         self.parameters_ = _fit(X_f32, self.num_features, self.max_dilations_per_kernel)
         return self
 
@@ -317,5 +344,13 @@ class MiniRocket(FeatureExtractor):
         X_in = X[np.newaxis, ...] if is_single else X
         X_f32 = np.ascontiguousarray(X_in, dtype=np.float32)
 
-        features = _transform_single(X_f32, self.parameters_) if is_single else _transform(X_f32, self.parameters_)
+        if self.scale_input:
+            X_f32 = self._robust_scale(X_f32)
+
+        features = (
+            _transform_single(X_f32, self.parameters_)
+            if is_single
+            else _transform(X_f32, self.parameters_)
+        )
         return features[0] if is_single else features
+
