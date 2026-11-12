@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.linalg
 from sklearn.linear_model import RidgeClassifierCV, SGDClassifier
@@ -59,7 +61,7 @@ class RidgeClassifier(Classifier):
             X_train = X_in
 
         # 2. Fit RidgeClassifierCV on the standardized training features
-        self.model_ = RidgeClassifierCV(alphas=self.alphas, class_weight="balanced", scoring="f1_weighted")
+        self.model_ = RidgeClassifierCV(alphas=self.alphas, class_weight="balanced", scoring="f1_macro")
         self.model_.fit(X_train, y)
         return self
 
@@ -246,16 +248,15 @@ class SGDLinearClassifier(Classifier):
 
 
 class IncrementalRidgeClassifier(Classifier):
-    """Exact out-of-core Ridge Classifier with balanced class weights and automatic alpha tuning.
+    """Exact out-of-core Ridge Classifier with balanced class weights and trace-scaled alpha tuning.
 
-    Accumulates the sufficient statistics (weighted Gram matrix X^T W X and X^T W Y)
-    across mini-batches, yielding the exact closed-form Cholesky solution without
-    ever holding the full (N, F) feature matrix in memory.
+    Matches scikit-learn's RidgeClassifier(class_weight='balanced') mathematically by
+    accumulating the exact sample-weighted Gram matrix X^T D_w X and class sums across batches.
     """
 
     def __init__(
         self,
-        alphas: np.ndarray | tuple[float, ...] = np.logspace(0, 6, 7),  # noqa: B008
+        alphas: np.ndarray | tuple[float, ...] = (0.01, 0.05, 0.2, 1.0, 5.0, 20.0, 100.0),
         confidence_threshold: float | None = None,
         normalize_features: bool = False,
         class_weight: str | None = "balanced",
@@ -273,22 +274,29 @@ class IncrementalRidgeClassifier(Classifier):
 
         self.scaler_: StandardScaler | None = None
         self.classes_: np.ndarray | None = None
-        self.coef_: np.ndarray | None = None # Shape: (K, F)
-        self.intercept_: np.ndarray | None = None # Shape: (K,)
+        self.class_weights_: np.ndarray | None = None
+        self.coef_: np.ndarray | None = None
+        self.intercept_: np.ndarray | None = None
         self.best_alpha_: float | None = None
 
-        # Internal incremental accumulators (cleared after finalize_fit)
+        # Incremental accumulators (freed after finalize_fit)
         self._gram: np.ndarray | None = None
-        self._xty: np.ndarray | None = None
-        self._w_sum: np.ndarray | None = None # Class counts / weights
-        self._x_sum: np.ndarray | None = None # Per-class feature sum: (K, F)
+        self._w_sum: np.ndarray | None = None
+        self._wx_sum: np.ndarray | None = None
         self._val_X: list[np.ndarray] = []
         self._val_y: list[np.ndarray] = []
         self._val_count: int = 0
 
-    # ------------------------------------------------------------------
-    # Incremental / Out-of-Core API (used by TimeSeriesPipeline)
-    # ------------------------------------------------------------------
+    def set_class_weights_from_labels(self, y_all: np.ndarray) -> None:
+        """Pre-compute exact global balanced class weights before streaming batches."""
+        classes, counts = np.unique(y_all, return_counts=True)
+        self.classes_ = np.sort(classes)
+        if self.class_weight == "balanced":
+            n_total = float(len(y_all))
+            n_classes = float(len(classes))
+            self.class_weights_ = (n_total / (n_classes * counts)).astype(np.float64)
+        else:
+            self.class_weights_ = np.ones(len(classes), dtype=np.float64)
 
     def partial_fit_scaler(self, X_batch: np.ndarray) -> None:
         """Pass 1: Incrementally compute exact global feature mean and std."""
@@ -301,20 +309,27 @@ class IncrementalRidgeClassifier(Classifier):
     def partial_fit_model(
         self, X_batch: np.ndarray, y_batch: np.ndarray, classes: np.ndarray
     ) -> None:
-        """Pass 2 (Single Epoch): Accumulate sufficient statistics X^T X and per-class sums."""
+        """Pass 2 (Single Epoch): Accumulate weighted Gram matrix X^T D_w X and weighted sums."""
         X_in = np.asarray(X_batch, dtype=np.float32)
         if self.normalize_features and self.scaler_ is not None:
-            X_in = (X_in - self.scaler_.mean_.astype(np.float32)) / self.scaler_.scale_.astype(np.float32)
+            scale = np.where(self.scaler_.scale_ < 1e-6, 1.0, self.scaler_.scale_).astype(np.float32)
+            X_in = (X_in - self.scaler_.mean_.astype(np.float32)) / scale
 
         if self.classes_ is None:
             self.classes_ = np.sort(np.unique(classes))
-            n_classes = len(self.classes_)
-            n_features = X_in.shape[1]
+        if self.class_weights_ is None:
+            # Fallback if set_class_weights_from_labels was not called beforehand
+            self.set_class_weights_from_labels(y_batch)
+
+        n_classes = len(self.classes_)
+        n_features = X_in.shape[1]
+
+        if self._gram is None:
             self._gram = np.zeros((n_features, n_features), dtype=np.float32)
-            self._x_sum = np.zeros((n_classes, n_features), dtype=np.float64)
+            self._wx_sum = np.zeros((n_classes, n_features), dtype=np.float64)
             self._w_sum = np.zeros(n_classes, dtype=np.float64)
 
-        # If tuning multiple alphas, hold out a small stratified slice until max_val_samples
+        # Hold out validation slice for tuning alpha
         if len(self.alphas) > 1 and self._val_count < self.max_val_samples:
             rng = np.random.default_rng(self.random_state + self._val_count)
             n_b = len(y_batch)
@@ -331,134 +346,169 @@ class IncrementalRidgeClassifier(Classifier):
                 X_in = X_in[tr_idx]
                 y_batch = y_batch[tr_idx]
 
-        self._accumulate_batch(X_in, y_batch)
+        self._accumulate_weighted_batch(X_in, y_batch)
 
-    def _accumulate_batch(self, X_in: np.ndarray, y_batch: np.ndarray) -> None:
-        """Accumulate uncentered Gram matrix and class-wise sums (weights applied at solve time)."""
-        assert self._gram is not None and self._x_sum is not None and self._w_sum is not None
-        # Note: To support exact class_weight='balanced' globally, if we weight samples by class,
-        # we can either weight X_in by class if class frequencies are known, or accumulate unweighted
-        # X^T X and class-balanced targets X^T Y. Standard RidgeClassifierCV with solver='cholesky'
-        # weights both X^T W X and X^T W Y, OR we can compute class weights on the first pass.
-        # Even simpler: in pipeline.fit, as y is completely in memory
-        self._gram += X_in.T @ X_in
-        for idx, c in enumerate(self.classes_):
-            mask = y_batch == c
+    def _accumulate_weighted_batch(self, X_in: np.ndarray, y_batch: np.ndarray) -> None:
+        """Accumulate exact sample-weighted X^T D_w X and class weighted sums."""
+        assert (
+            self._gram is not None
+            and self._wx_sum is not None
+            and self._w_sum is not None
+            and self.classes_ is not None
+            and self.class_weights_ is not None
+        )
+        # Map each sample's label to its class index [0..K-1]
+        class_idx = np.searchsorted(self.classes_, y_batch)
+        sample_w = self.class_weights_[class_idx]  # (B,)
+
+        # Weight rows by sqrt(w_i) so X_w.T @ X_w == X_in.T @ diag(w) @ X_in
+        sqrt_w = np.sqrt(sample_w, dtype=np.float32)[:, np.newaxis]
+        X_w = X_in * sqrt_w
+        self._gram += X_w.T @ X_w
+
+        for k in range(len(self.classes_)):
+            mask = class_idx == k
             if np.any(mask):
-                self._w_sum[idx] += int(np.sum(mask))
-                self._x_sum[idx] += X_in[mask].sum(axis=0, dtype=np.float64)
+                w_k = self.class_weights_[k]
+                count_k = int(np.sum(mask))
+                self._w_sum[k] += w_k * count_k
+                self._wx_sum[k] += w_k * X_in[mask].sum(axis=0, dtype=np.float64)
 
     def finalize_fit(self) -> IncrementalRidgeClassifier:
-        """Solve the exact linear system via Cholesky decomposition and free accumulators."""
-        if self._gram is None or self._x_sum is None or self._w_sum is None or self.classes_ is None:
+        """Solve exact weighted system via Cholesky and free memory."""
+        if (
+            self._gram is None
+            or self._wx_sum is None
+            or self._w_sum is None
+            or self.classes_ is None
+        ):
             raise ValueError("No batches were accumulated before calling finalize_fit.")
 
-        # 1. Select best alpha on held-out validation buffer if multiple alphas provided
+        # 1. Select optimal trace-scaled alpha on held-out validation buffer
         if len(self.alphas) > 1 and len(self._val_X) > 0:
             X_val = np.concatenate(self._val_X, axis=0)
             y_val = np.concatenate(self._val_y, axis=0)
+            self._val_X.clear()
+            self._val_y.clear()
+
+            w_total_tr = float(np.sum(self._w_sum))
+            x_mean_tr = (self._wx_sum.sum(axis=0) / w_total_tr).astype(np.float32)
+            B_tr, y_mean_tr = self._build_rhs(w_total_tr, x_mean_tr)
+
+            # Center Gram matrix in-place once for the validation grid search
+            self._gram -= w_total_tr * np.outer(x_mean_tr, x_mean_tr)
+            mean_diag = max(float(np.trace(self._gram)) / self._gram.shape[0], 1.0)
 
             best_score = -np.inf
             best_alpha = float(self.alphas[0])
 
-            for alpha in self.alphas:
-                coef, intercept = self._solve_from_accumulators(float(alpha))
+            for rel_alpha in self.alphas:
+                eff_alpha = float(rel_alpha) * mean_diag
+                coef, intercept = self._solve_centered(
+                    eff_alpha, B_tr, x_mean_tr, y_mean_tr, overwrite_gram=False
+                )
                 scores = X_val @ coef.T + intercept
                 preds = self.classes_[np.argmax(scores, axis=1)]
-                score = float(f1_score(y_val, preds, average="weighted"))
+                # Macro F1 aligns directly with per-class balanced accuracy / geomean!
+                score = float(f1_score(y_val, preds, average="macro"))
                 if score > best_score:
                     best_score = score
-                    best_alpha = float(alpha)
+                    best_alpha = float(rel_alpha)
 
+            # Restore uncentered Gram matrix and fold validation data back in
+            self._gram += w_total_tr * np.outer(x_mean_tr, x_mean_tr)
             self.best_alpha_ = best_alpha
-            # Fold validation buffer back into accumulators so 100% of data is used for final weights
-            self._accumulate_batch(X_val, y_val)
-            self._val_X.clear()
-            self._val_y.clear()
+            self._accumulate_weighted_batch(X_val, y_val)
+            del X_val, y_val
         else:
             self.best_alpha_ = float(self.alphas[0])
 
-        # 2. Compute final exact weights on 100% of accumulated data
-        self.coef_, self.intercept_ = self._solve_from_accumulators(self.best_alpha_)
+        # 2. Final solve on 100% of accumulated data
+        w_total = float(np.sum(self._w_sum))
+        x_mean = (self._wx_sum.sum(axis=0) / w_total).astype(np.float32)
+        B, y_mean = self._build_rhs(w_total, x_mean)
 
-        # 3. Free massive Gram matrix before saving with joblib
+        self._gram -= w_total * np.outer(x_mean, x_mean)
+        mean_diag_full = max(float(np.trace(self._gram)) / self._gram.shape[0], 1.0)
+        eff_best_alpha = self.best_alpha_ * mean_diag_full
+
+        self.coef_, self.intercept_ = self._solve_centered(
+            eff_best_alpha, B, x_mean, y_mean, overwrite_gram=True
+        )
+
+        # 3. Free accumulators
         self._gram = None
-        self._x_sum = None
+        self._wx_sum = None
         self._w_sum = None
         return self
 
-    def _solve_from_accumulators(self, alpha: float) -> tuple[np.ndarray, np.ndarray]:
-        """Solve (G_centered + alpha * I) W = B_centered in-place without extra memory copies."""
-        assert self._gram is not None and self._x_sum is not None and self._w_sum is not None
-        n_total = float(np.sum(self._w_sum))
+    def _build_rhs(
+        self, w_total: float, x_mean: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Construct centered RHS matrix B = X^T D_w (Y - y_mean) for Y in {-1, +1}."""
+        assert self._wx_sum is not None and self._w_sum is not None and self.classes_ is not None
         n_classes = len(self.classes_)
-        n_features = self._gram.shape[0]
+        n_features = x_mean.shape[0]
 
-        # Global feature mean: (F,)
-        x_mean = (self._x_sum.sum(axis=0) / n_total).astype(np.float32)
-
-        # Build {-1, +1} target matrix sums with balanced class weighting on targets
-        # For class k, positive samples have target +1, negative samples have -1.
-        # If class_weight == "balanced", we reweight each class column's positive vs negative contribution
-        # so every class has equal pull on the hyperplane
         B = np.empty((n_features, n_classes), dtype=np.float32)
         y_mean = np.empty(n_classes, dtype=np.float32)
-        total_x_sum = self._x_sum.sum(axis=0)
+        total_wx_sum = self._wx_sum.sum(axis=0)
 
         for k in range(n_classes):
-            n_pos = self._w_sum[k]
-            n_neg = n_total - n_pos
-            if self.class_weight == "balanced" and n_pos > 0 and n_neg > 0:
-                # Balance positive and negative pulls for One-vs-Rest class k
-                w_pos = n_total / (2.0 * n_pos)
-                w_neg = n_total / (2.0 * n_neg)
-            else:
-                w_pos = 1.0
-                w_neg = 1.0
-
-            pos_x_sum = self._x_sum[k]
-            neg_x_sum = total_x_sum - pos_x_sum
-
-            # X^T y_k = w_pos * sum_{i in k} x_i - w_neg * sum_{i not in k} x_i
-            xty_k = (w_pos * pos_x_sum - w_neg * neg_x_sum).astype(np.float32)
-            ym_k = float((w_pos * n_pos - w_neg * n_neg) / n_total)
+            # In {-1, +1} encoding: y_ik = +1 if i in class k else -1
+            # Therefore: sum_i w_i x_i y_ik = 2 * sum_{i in k} w_i x_i - sum_all w_i x_i
+            xty_k = (2.0 * self._wx_sum[k] - total_wx_sum).astype(np.float32)
+            ym_k = float((2.0 * self._w_sum[k] - w_total) / w_total)
             y_mean[k] = ym_k
-            # Centered RHS: X^T y_k - N * x_mean * y_mean_k
-            B[:, k] = xty_k - n_total * x_mean * ym_k
+            B[:, k] = xty_k - w_total * x_mean * ym_k
 
-        # Center Gram matrix: G_c = X^T X - N * outer(x_mean, x_mean) + alpha * I
-        # Modify self._gram temporarily and restore it after solve to avoid allocating a second huge matrix
-        mean_outer = np.outer(x_mean, x_mean)
-        self._gram -= n_total * mean_outer
-        self._gram.flat[:: n_features + 1] += np.float32(alpha)
+        return B, y_mean
 
-        try:
-            # Fast, exact Cholesky solve
-            W = scipy.linalg.solve(
-                self._gram, B, assume_a="pos", overwrite_a=False, overwrite_b=True
-            )
-        except scipy.linalg.LinAlgError:
-            W = scipy.linalg.solve(
-                self._gram, B, assume_a="sym", overwrite_a=False, overwrite_b=True
-            )
-        finally:
-            # Restore self._gram in-place
-            self._gram.flat[:: n_features + 1] -= np.float32(alpha)
-            self._gram += n_total * mean_outer
+    def _solve_centered(
+        self,
+        eff_alpha: float,
+        B: np.ndarray,
+        x_mean: np.ndarray,
+        y_mean: np.ndarray,
+        overwrite_gram: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Solve (G_centered + eff_alpha * I) W = B."""
+        assert self._gram is not None
+        n_features = self._gram.shape[0]
+        self._gram.flat[:: n_features + 1] += np.float32(eff_alpha)
 
-        coef = W.T.astype(np.float32) # (K, F)
-        intercept = (y_mean - coef @ x_mean).astype(np.float32) # (K,)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", scipy.linalg.LinAlgWarning)
+            try:
+                W = scipy.linalg.solve(
+                    self._gram,
+                    B,
+                    assume_a="pos",
+                    overwrite_a=overwrite_gram,
+                    overwrite_b=False,
+                )
+            except scipy.linalg.LinAlgError:
+                W = scipy.linalg.solve(
+                    self._gram,
+                    B,
+                    assume_a="sym",
+                    overwrite_a=overwrite_gram,
+                    overwrite_b=False,
+                )
+            finally:
+                if not overwrite_gram:
+                    self._gram.flat[:: n_features + 1] -= np.float32(eff_alpha)
+
+        coef = W.T.astype(np.float32)
+        intercept = (y_mean - coef @ x_mean).astype(np.float32)
         return coef, intercept
-
-    # ------------------------------------------------------------------
-    # Standard In-Memory Fit & Predict Contract
-    # ------------------------------------------------------------------
 
     def fit(
         self, X: np.ndarray, y: np.ndarray, batch_size: int = 4096
     ) -> IncrementalRidgeClassifier:
         """Standard fit on a full feature matrix (processes in slices to save RAM)."""
-        classes = np.unique(y)
+        self.set_class_weights_from_labels(y)
+        classes = self.classes_
         n_samples = X.shape[0]
         if self.normalize_features:
             for start in range(0, n_samples, batch_size):
@@ -482,7 +532,6 @@ class IncrementalRidgeClassifier(Classifier):
         return margin < self.confidence_threshold
 
     def predict(self, X: np.ndarray) -> int | np.ndarray:
-        """Low-latency prediction using exact closed-form weights."""
         if self.coef_ is None or self.intercept_ is None or self.classes_ is None:
             raise ValueError("IncrementalRidgeClassifier must be fitted before calling predict.")
 
@@ -491,7 +540,8 @@ class IncrementalRidgeClassifier(Classifier):
         X_f32 = np.asarray(X_in, dtype=np.float32)
 
         if self.normalize_features and self.scaler_ is not None:
-            X_scaled = (X_f32 - self.scaler_.mean_.astype(np.float32)) / self.scaler_.scale_.astype(np.float32)
+            scale = np.where(self.scaler_.scale_ < 1e-6, 1.0, self.scaler_.scale_).astype(np.float32)
+            X_scaled = (X_f32 - self.scaler_.mean_.astype(np.float32)) / scale
         else:
             X_scaled = X_f32
 
