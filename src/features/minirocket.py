@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from numba import njit, prange, vectorize
+from numba import njit, prange
 
 from .base import FeatureExtractor
 
@@ -192,21 +192,8 @@ def _fit(
     )
 
 
-@vectorize("float32(float32,float32)", nopython=True, cache=True)
-def _PPV(a: float, b: float) -> float:
-    if a > b:
-        return 1
-    else:
-        return 0
 
-
-@njit(
-    "float32[:,:](float32[:,:,:],Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])))",
-    fastmath=True,
-    parallel=True,
-    cache=True,
-)
-def _transform(X: np.ndarray, parameters) -> np.ndarray:
+def _transform_core(X: np.ndarray, parameters) -> np.ndarray:
     num_examples, num_channels, input_length = X.shape
     (
         num_channels_per_combination,
@@ -218,7 +205,7 @@ def _transform(X: np.ndarray, parameters) -> np.ndarray:
 
     num_dilations = len(dilations)
     num_features = NUM_KERNELS * np.sum(num_features_per_dilation)
-    features = np.zeros((num_examples, num_features), dtype=np.float32)
+    features = np.empty((num_examples, num_features), dtype=np.float32)
 
     for example_index in prange(num_examples):
         _X = X[example_index]
@@ -226,78 +213,85 @@ def _transform(X: np.ndarray, parameters) -> np.ndarray:
         A = -_X
         G = _X + _X + _X
 
+        C_alpha = np.empty((num_channels, input_length), dtype=np.float32)
+        C_gamma = np.empty((KERNEL_LENGTH, num_channels, input_length), dtype=np.float32)
+        C = np.empty(input_length, dtype=np.float32)
+
         feature_index_start = 0
         combination_index = 0
         num_channels_start = 0
 
         for dilation_index in range(num_dilations):
             _padding0 = dilation_index % 2
-
             dilation = dilations[dilation_index]
             padding = ((KERNEL_LENGTH - 1) * dilation) // 2
             num_features_this_dilation = num_features_per_dilation[dilation_index]
 
-            C_alpha = np.zeros((num_channels, input_length), dtype=np.float32)
             C_alpha[:] = A
-
-            C_gamma = np.zeros(
-                (KERNEL_LENGTH, num_channels, input_length), dtype=np.float32
-            )
+            C_gamma[:] = 0.0
             C_gamma[HALF_KERNEL] = G
 
             start = dilation
             end = input_length - padding
 
             for gamma_index in range(HALF_KERNEL):
-                C_alpha[:, -end:] = C_alpha[:, -end:] + A[:, :end]
+                C_alpha[:, -end:] += A[:, :end]
                 C_gamma[gamma_index, :, -end:] = G[:, :end]
                 end += dilation
 
             for gamma_index in range(HALF_KERNEL + 1, KERNEL_LENGTH):
-                C_alpha[:, :-start] = C_alpha[:, :-start] + A[:, start:]
+                C_alpha[:, :-start] += A[:, start:]
                 C_gamma[gamma_index, :, :-start] = G[:, start:]
                 start += dilation
 
             for kernel_index in range(NUM_KERNELS):
                 feature_index_end = feature_index_start + num_features_this_dilation
-                num_channels_this_combination = num_channels_per_combination[
-                    combination_index
-                ]
+                num_channels_this_combination = num_channels_per_combination[combination_index]
                 num_channels_end = num_channels_start + num_channels_this_combination
-                channels_this_combination = channel_indices[
-                    num_channels_start:num_channels_end
-                ]
 
                 _padding1 = (_padding0 + kernel_index) % 2
-
                 index_0, index_1, index_2 = _INDICES[kernel_index]
-                C = (
-                    C_alpha[channels_this_combination]
-                    + C_gamma[index_0][channels_this_combination]
-                    + C_gamma[index_1][channels_this_combination]
-                    + C_gamma[index_2][channels_this_combination]
-                )
-                C = np.sum(C, axis=0)
 
-                if _padding1 == 0:
-                    for feature_count in range(num_features_this_dilation):
-                        features[example_index, feature_index_start + feature_count] = (
-                            _PPV(C, biases[feature_index_start + feature_count]).mean()
+                ch0 = channel_indices[num_channels_start]
+                for t in range(input_length):
+                    C[t] = (
+                        C_alpha[ch0, t]
+                        + C_gamma[index_0, ch0, t]
+                        + C_gamma[index_1, ch0, t]
+                        + C_gamma[index_2, ch0, t]
+                    )
+                for ch_idx in range(num_channels_start + 1, num_channels_end):
+                    ch = channel_indices[ch_idx]
+                    for t in range(input_length):
+                        C[t] += (
+                            C_alpha[ch, t]
+                            + C_gamma[index_0, ch, t]
+                            + C_gamma[index_1, ch, t]
+                            + C_gamma[index_2, ch, t]
                         )
-                else:
-                    for feature_count in range(num_features_this_dilation):
-                        features[example_index, feature_index_start + feature_count] = (
-                            _PPV(
-                                C[padding:-padding],
-                                biases[feature_index_start + feature_count],
-                            ).mean()
-                        )
+
+                start_t = 0 if _padding1 == 0 else padding
+                end_t = input_length if _padding1 == 0 else input_length - padding
+                inv_len = np.float32(1.0 / (end_t - start_t))
+
+                for f_idx in range(feature_index_start, feature_index_end):
+                    bias = biases[f_idx]
+                    count = 0
+                    for t in range(start_t, end_t):
+                        if C[t] > bias:
+                            count += 1
+                    features[example_index, f_idx] = count * inv_len
 
                 feature_index_start = feature_index_end
                 combination_index += 1
                 num_channels_start = num_channels_end
 
     return features
+
+
+_SIG = "float32[:,:](float32[:,:,:],Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])))"
+_transform = njit(_SIG, fastmath=True, parallel=True, cache=True)(_transform_core)
+_transform_single = njit(_SIG, fastmath=True, parallel=False, cache=True)(_transform_core)
 
 
 class MiniRocket(FeatureExtractor):
@@ -323,5 +317,5 @@ class MiniRocket(FeatureExtractor):
         X_in = X[np.newaxis, ...] if is_single else X
         X_f32 = np.ascontiguousarray(X_in, dtype=np.float32)
 
-        features = _transform(X_f32, self.parameters_)
+        features = _transform_single(X_f32, self.parameters_) if is_single else _transform(X_f32, self.parameters_)
         return features[0] if is_single else features

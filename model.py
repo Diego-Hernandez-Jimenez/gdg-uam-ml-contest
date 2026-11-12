@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 
 import joblib
-import numpy as np
 
 from competition_api import Sample
 
@@ -20,5 +19,5 @@ class Model:
 
     def predict(self, x: Sample) -> int:
         # x.series is a read-only float32 array of shape (4, 256)
-        series = np.asarray(x.series, dtype=np.float64)
-        return int(self.pipeline.predict(series))
+        # series = np.asarray(x.series, dtype=np.float64)
+        return int(self.pipeline.predict(x.series))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from numba import njit
 from numpy.lib.stride_tricks import sliding_window_view
 
 from .base import Step
@@ -48,6 +49,33 @@ class NaNInterpolation(Step):
         return out
 
 
+@njit(fastmath=True, cache=True)
+def _hampel_single_2d(series: np.ndarray, window: int, n_sigmas: float) -> np.ndarray:
+    C, L = series.shape
+    half = window // 2
+    out = np.empty_like(series)
+    buf = np.empty(window, dtype=series.dtype)
+    dev = np.empty(window, dtype=series.dtype)
+
+    for c in range(C):
+        for t in range(L):
+            for k in range(window):
+                idx = t + k - half
+                if idx < 0:
+                    idx = 0
+                elif idx >= L:
+                    idx = L - 1
+                buf[k] = series[c, idx]
+            buf.sort()
+            med = buf[half]
+            for k in range(window):
+                dev[k] = abs(buf[k] - med)
+            dev.sort()
+            mad = dev[half] * 1.4826 + 1e-9
+            val = series[c, t]
+            out[c, t] = med if abs(val - med) > n_sigmas * mad else val
+    return out
+
 class HampelFilter(Step):
     """Selective outlier filter using local median and MAD (Median Absolute Deviation).
 
@@ -62,7 +90,12 @@ class HampelFilter(Step):
         self.window = window
         self.n_sigmas = n_sigmas
 
+
+
     def transform(self, series: np.ndarray) -> np.ndarray:
+        if series.ndim == 2:
+            return _hampel_single_2d(np.ascontiguousarray(series), self.window, self.n_sigmas)
+
         half = self.window // 2
 
         # Build dynamic padding based on array dimensions (pad only the last axis 'L')
