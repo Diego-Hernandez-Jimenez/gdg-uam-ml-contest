@@ -15,26 +15,19 @@ class Identity(Step):
 
 
 class NaNInterpolation(Step):
-    """Linear NaN interpolation per channel.
-
-    Avoids artificial high-frequency artifacts that zero-filling would inject.
-    If an entire channel contains only NaNs, it falls back to 0.0.
-
-    Supports both batch mode (N, C, L) and streaming/inference mode (C, L).
-    """
+    """Linear NaN interpolation per channel maintaining float32 precision."""
 
     def transform(self, series: np.ndarray) -> np.ndarray:
-        # Avoid modifying the original input in place
-        out = np.array(series, dtype=np.float64)
+        if not np.isnan(series).any():
+            return np.asarray(series, dtype=np.float32)
 
-        # Unify dimensions internally to (N, C, L)
+        out = np.array(series, dtype=np.float32, copy=True)
         is_single = out.ndim == 2
         X_3d = out[np.newaxis, ...] if is_single else out
 
         N, C, L = X_3d.shape
-        t = np.arange(L)
+        t = np.arange(L, dtype=np.float32)
 
-        # Highly optimized memory contiguous loops for interpolation
         for i in range(N):
             for c in range(C):
                 channel = X_3d[i, c]
@@ -44,7 +37,7 @@ class NaNInterpolation(Step):
                 elif missing.any():
                     channel[missing] = np.interp(
                         t[missing], t[~missing], channel[~missing]
-                    )
+                    ).astype(np.float32)
 
         return out
 
@@ -114,19 +107,15 @@ class HampelFilter(Step):
 
 
 class RobustScale(Step):
-    """Local robust scaling per channel using Median and IQR (Interquartile Range).
-
-    Removes DC bias and scales amplitude, keeping outliers from distorting the bounds.
-    Should run AFTER HampelFilter.
-
-    Supports both batch mode (N, C, L) and streaming/inference mode (C, L).
-    """
+    """Local robust scaling per channel using Median and IQR in a single pass."""
 
     def __init__(self, epsilon: float = 1e-9):
-        self.epsilon = epsilon
+        self.epsilon = np.float32(epsilon)
 
     def transform(self, series: np.ndarray) -> np.ndarray:
-        median = np.median(series, axis=-1, keepdims=True)
-        q75, q25 = np.percentile(series, [75, 25], axis=-1, keepdims=True)
+        # Single sort pass for 25%, 50% (median), and 75% quantiles
+        q25, median, q75 = np.percentile(series, [25, 50, 75], axis=-1, keepdims=True)
         iqr = (q75 - q25) + self.epsilon
-        return (series - median) / iqr
+        return ((series - median) / iqr).astype(np.float32, copy=False)
+
+
