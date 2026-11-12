@@ -1,0 +1,21 @@
+# uvx prek run --all-files
+
+repos:
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # too many, save for later
+  # - repo: https://github.com/astral-sh/ty-pre-commit
+  #   rev: v0.0.73
+  #   hooks:
+  #     - id: ty

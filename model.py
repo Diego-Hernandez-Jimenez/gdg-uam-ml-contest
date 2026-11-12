@@ -1,15 +1,24 @@
+import os
 from pathlib import Path
 
-from competition_api import ABSTAIN, Sample
+import joblib
 
-HERE = Path(__file__).parent  # load your files relative to this file
+from competition_api import Sample
+
+HERE = Path(__file__).parent
 
 
 class Model:
+    """Official Competition Model Class."""
+
     def __init__(self):
-        # Load weights here. Untimed, but must finish within the setup timeout.
-        self.weights = HERE / "weights.pt"
+        # Allow selecting specific weights via env var, defaulting to artifacts/latest.joblib
+        default_path = HERE / "artifacts" / "latest.joblib"
+        weights_path = Path(os.environ.get("MODEL_WEIGHTS", default_path))
+        self.pipeline = joblib.load(weights_path)
 
     def predict(self, x: Sample) -> int:
-        # Return a class id in 0..7, or ABSTAIN (-1) to pass.
-        return ABSTAIN
+        return int(self.pipeline.predict(x.series))
+
+model = Model()
+print(f"ridge alpha: {model.pipeline.classifier.model_.alpha_}")
