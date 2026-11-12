@@ -54,7 +54,9 @@ def test_from_yaml_maps_nested_schema(minimal_yaml_path):
     assert config.name == "minirocket_test"
     assert config.preprocessing.steps[0] == "nan_interpolation"
     assert config.preprocessing.steps[1] == {"hampel": {"window": 5, "n_sigmas": 3.0}}
-    assert config.feature_extractor.components == [{"minirocket": {"num_features": 200}}]
+    assert config.feature_extractor.components == [
+        {"minirocket": {"num_features": 200}}
+    ]
     assert config.classifier.model == "ridge"
     assert config.classifier.confidence_threshold == 0.1
     assert config.training.cv_folds == 2

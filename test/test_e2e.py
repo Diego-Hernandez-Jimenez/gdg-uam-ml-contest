@@ -70,7 +70,9 @@ def test_full_pipeline_e2e_fit_predict_save_load(synthetic_8class_dataset):
             HampelFilter(window=5, n_sigmas=3.0),
             RobustScale(),
         ],
-        feature_extractor=MiniRocket(num_features=500),  # small feature space for test speed
+        feature_extractor=MiniRocket(
+            num_features=500
+        ),  # small feature space for test speed
         classifier=RidgeClassifier(confidence_threshold=0.1),
         noise_threshold=3.5,
     )
@@ -107,7 +109,9 @@ def test_full_pipeline_e2e_fit_predict_save_load(synthetic_8class_dataset):
 def test_passthrough_identity_pipeline_e2e(synthetic_8class_dataset):
     """Verifies that composition with pass-through (Identity) steps functions perfectly."""
     X, y = synthetic_8class_dataset
-    X_clean = np.nan_to_num(X, nan=0.0)  # Avoid scikit-learn NaNs crash on raw passthrough
+    X_clean = np.nan_to_num(
+        X, nan=0.0
+    )  # Avoid scikit-learn NaNs crash on raw passthrough
 
     pipeline = TimeSeriesPipeline(
         preprocessing_steps=[Identity()],
@@ -284,7 +288,9 @@ def test_exact_standardization_equivalence_full_vs_minibatch(synthetic_8class_da
     pipe_inc.fit(X_clean, y, batch_size=5)
 
     # Global mean and std must match to floating-point precision
-    np.testing.assert_allclose(fe_full.mean_, fe_incremental.mean_, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(
+        fe_full.mean_, fe_incremental.mean_, rtol=1e-5, atol=1e-6
+    )
     np.testing.assert_allclose(fe_full.std_, fe_incremental.std_, rtol=1e-5, atol=1e-6)
 
     # Predictions on single samples must be identical

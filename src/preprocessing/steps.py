@@ -69,6 +69,7 @@ def _hampel_single_2d(series: np.ndarray, window: int, n_sigmas: float) -> np.nd
             out[c, t] = med if abs(val - med) > n_sigmas * mad else val
     return out
 
+
 class HampelFilter(Step):
     """Selective outlier filter using local median and MAD (Median Absolute Deviation).
 
@@ -83,11 +84,11 @@ class HampelFilter(Step):
         self.window = window
         self.n_sigmas = n_sigmas
 
-
-
     def transform(self, series: np.ndarray) -> np.ndarray:
         if series.ndim == 2:
-            return _hampel_single_2d(np.ascontiguousarray(series), self.window, self.n_sigmas)
+            return _hampel_single_2d(
+                np.ascontiguousarray(series), self.window, self.n_sigmas
+            )
 
         half = self.window // 2
 
@@ -117,5 +118,3 @@ class RobustScale(Step):
         q25, median, q75 = np.percentile(series, [25, 50, 75], axis=-1, keepdims=True)
         iqr = (q75 - q25) + self.epsilon
         return ((series - median) / iqr).astype(np.float32, copy=False)
-
-

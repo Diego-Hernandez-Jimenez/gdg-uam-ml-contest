@@ -1,4 +1,5 @@
 """MultiRocket feature extractor (optimized zero-allocation float32 implementation)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -58,9 +59,13 @@ def _fit_biases(
 
         for kernel_index in range(NUM_KERNELS):
             feature_index_end = feature_index_start + num_features_this_dilation
-            num_channels_this_combination = num_channels_per_combination[combination_index]
+            num_channels_this_combination = num_channels_per_combination[
+                combination_index
+            ]
             num_channels_end = num_channels_start + num_channels_this_combination
-            channels_this_combination = channel_indices[num_channels_start:num_channels_end]
+            channels_this_combination = channel_indices[
+                num_channels_start:num_channels_end
+            ]
 
             _X = X[np.random.randint(num_examples)][channels_this_combination]
 
@@ -106,15 +111,21 @@ def _fit_dilations(
     input_length: int, num_features: int, max_dilations_per_kernel: int
 ) -> tuple[np.ndarray, np.ndarray]:
     num_features_per_kernel = num_features // NUM_KERNELS
-    true_max_dilations_per_kernel = min(num_features_per_kernel, max_dilations_per_kernel)
+    true_max_dilations_per_kernel = min(
+        num_features_per_kernel, max_dilations_per_kernel
+    )
     multiplier = num_features_per_kernel / true_max_dilations_per_kernel
 
     max_exponent = np.log2((input_length - 1) / (KERNEL_LENGTH - 1))
     dilations, num_features_per_dilation = np.unique(
-        np.logspace(0, max_exponent, true_max_dilations_per_kernel, base=2).astype(np.int32),
+        np.logspace(0, max_exponent, true_max_dilations_per_kernel, base=2).astype(
+            np.int32
+        ),
         return_counts=True,
     )
-    num_features_per_dilation = (num_features_per_dilation * multiplier).astype(np.int32)
+    num_features_per_dilation = (num_features_per_dilation * multiplier).astype(
+        np.int32
+    )
 
     remainder = num_features_per_kernel - np.sum(num_features_per_dilation)
     i = 0
@@ -272,7 +283,9 @@ def _transform_single_representation(
 
         for kernel_index in range(NUM_KERNELS):
             feature_index_end = feature_index_start + num_features_this_dilation
-            num_channels_this_combination = num_channels_per_combination[combination_index]
+            num_channels_this_combination = num_channels_per_combination[
+                combination_index
+            ]
             num_channels_end = num_channels_start + num_channels_this_combination
 
             _padding1 = (_padding0 + kernel_index) % 2
@@ -326,7 +339,13 @@ def _transform_core(
 ) -> np.ndarray:
     num_examples, num_channels, input_length = X.shape
 
-    num_channels_per_combination, channel_indices, dilations, num_features_per_dilation, biases = parameters
+    (
+        num_channels_per_combination,
+        channel_indices,
+        dilations,
+        num_features_per_dilation,
+        biases,
+    ) = parameters
     _, _, dilations1, num_features_per_dilation1, biases1 = parameters1
 
     num_features = NUM_KERNELS * np.sum(num_features_per_dilation)
@@ -343,7 +362,9 @@ def _transform_core(
 
         # Pre-allocate scratch buffers once per sample (reused across base & diff)
         C_alpha = np.empty((num_channels, input_length), dtype=np.float32)
-        C_gamma = np.empty((KERNEL_LENGTH, num_channels, input_length), dtype=np.float32)
+        C_gamma = np.empty(
+            (KERNEL_LENGTH, num_channels, input_length), dtype=np.float32
+        )
         C = np.empty(input_length, dtype=np.float32)
 
         # 1. Base series pass
@@ -387,7 +408,9 @@ _SIG = (
     "Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])),int32)"
 )
 transform = njit(_SIG, fastmath=True, parallel=True, cache=True)(_transform_core)
-_transform_single = njit(_SIG, fastmath=True, parallel=False, cache=True)(_transform_core)
+_transform_single = njit(_SIG, fastmath=True, parallel=False, cache=True)(
+    _transform_core
+)
 
 
 class MultiRocket(FeatureExtractor):
@@ -404,7 +427,9 @@ class MultiRocket(FeatureExtractor):
         X1_f32 = np.ascontiguousarray(np.diff(X_f32, axis=-1), dtype=np.float32)
 
         self.parameters_ = fit(X_f32, self.num_features, self.max_dilations_per_kernel)
-        self.parameters1_ = fit(X1_f32, self.num_features, self.max_dilations_per_kernel)
+        self.parameters1_ = fit(
+            X1_f32, self.num_features, self.max_dilations_per_kernel
+        )
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
@@ -418,5 +443,7 @@ class MultiRocket(FeatureExtractor):
         X1_f32 = np.ascontiguousarray(np.diff(X_f32, axis=-1), dtype=np.float32)
 
         if is_single:
-            return _transform_single(X_f32, X1_f32, self.parameters_, self.parameters1_, 4)[0]
+            return _transform_single(
+                X_f32, X1_f32, self.parameters_, self.parameters1_, 4
+            )[0]
         return transform(X_f32, X1_f32, self.parameters_, self.parameters1_, 4)

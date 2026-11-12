@@ -53,9 +53,7 @@ class BaselineFeaturesExtractor(FeatureExtractor):
 
         # 3. Roughness features: (N, C, 2)
         steps = np.diff(z, axis=-1)
-        roughness = np.stack(
-            [steps.std(axis=-1), np.abs(steps).mean(axis=-1)], axis=-1
-        )
+        roughness = np.stack([steps.std(axis=-1), np.abs(steps).mean(axis=-1)], axis=-1)
 
         # 4. Autocorrelation features: (N, C, len(acf_lags))
         acf = np.stack(
@@ -66,9 +64,7 @@ class BaselineFeaturesExtractor(FeatureExtractor):
         # 5. Spectral features: (N, C, n_bands)
         power = np.abs(np.fft.rfft(z, axis=-1))[:, :, 1:] ** 2
         bands = np.array_split(power, self.n_bands, axis=-1)
-        spectral = np.log1p(
-            np.stack([band.sum(axis=-1) for band in bands], axis=-1)
-        )
+        spectral = np.log1p(np.stack([band.sum(axis=-1) for band in bands], axis=-1))
 
         # Concatenate all per-channel groups: (N, C, 2 + Q + 2 + Lags + Bands) -> flatten to (N, C * F_ch)
         per_channel = np.concatenate(

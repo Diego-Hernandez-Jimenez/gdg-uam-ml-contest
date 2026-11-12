@@ -192,7 +192,6 @@ def _fit(
     )
 
 
-
 def _transform_core(X: np.ndarray, parameters) -> np.ndarray:
     num_examples, num_channels, input_length = X.shape
     (
@@ -214,7 +213,9 @@ def _transform_core(X: np.ndarray, parameters) -> np.ndarray:
         G = _X + _X + _X
 
         C_alpha = np.empty((num_channels, input_length), dtype=np.float32)
-        C_gamma = np.empty((KERNEL_LENGTH, num_channels, input_length), dtype=np.float32)
+        C_gamma = np.empty(
+            (KERNEL_LENGTH, num_channels, input_length), dtype=np.float32
+        )
         C = np.empty(input_length, dtype=np.float32)
 
         feature_index_start = 0
@@ -246,7 +247,9 @@ def _transform_core(X: np.ndarray, parameters) -> np.ndarray:
 
             for kernel_index in range(NUM_KERNELS):
                 feature_index_end = feature_index_start + num_features_this_dilation
-                num_channels_this_combination = num_channels_per_combination[combination_index]
+                num_channels_this_combination = num_channels_per_combination[
+                    combination_index
+                ]
                 num_channels_end = num_channels_start + num_channels_this_combination
 
                 _padding1 = (_padding0 + kernel_index) % 2
@@ -291,7 +294,10 @@ def _transform_core(X: np.ndarray, parameters) -> np.ndarray:
 
 _SIG = "float32[:,:](float32[:,:,:],Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])))"
 _transform = njit(_SIG, fastmath=True, parallel=True, cache=True)(_transform_core)
-_transform_single = njit(_SIG, fastmath=True, parallel=False, cache=True)(_transform_core)
+_transform_single = njit(_SIG, fastmath=True, parallel=False, cache=True)(
+    _transform_core
+)
+
 
 class MiniRocket(FeatureExtractor):
     """MiniRocket feature extractor wrapped in the standard FeatureExtractor contract."""
@@ -353,4 +359,3 @@ class MiniRocket(FeatureExtractor):
             else _transform(X_f32, self.parameters_)
         )
         return features[0] if is_single else features
-

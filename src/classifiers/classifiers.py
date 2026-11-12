@@ -123,7 +123,9 @@ class SGDLinearClassifier(Classifier):
 
     def predict(self, X: np.ndarray) -> int | np.ndarray:
         if self.model_ is None:
-            raise ValueError("SGDLinearClassifier must be fitted before calling predict.")
+            raise ValueError(
+                "SGDLinearClassifier must be fitted before calling predict."
+            )
 
         is_single = X.ndim == 1
         X_f32 = np.asarray(X[np.newaxis, :] if is_single else X, dtype=np.float32)
@@ -152,7 +154,15 @@ class IncrementalRidgeClassifier(Classifier):
 
     def __init__(
         self,
-        alphas: np.ndarray | tuple[float, ...] = (0.01, 0.05, 0.2, 1.0, 5.0, 20.0, 100.0),
+        alphas: np.ndarray | tuple[float, ...] = (
+            0.01,
+            0.05,
+            0.2,
+            1.0,
+            5.0,
+            20.0,
+            100.0,
+        ),
         confidence_threshold: float | None = None,
         class_weight: str | None = "balanced",
         val_fraction: float = 0.15,
@@ -183,7 +193,9 @@ class IncrementalRidgeClassifier(Classifier):
         classes, counts = np.unique(y_all, return_counts=True)
         self.classes_ = np.sort(classes)
         if self.class_weight == "balanced":
-            self.class_weights_ = (len(y_all) / (len(classes) * counts)).astype(np.float64)
+            self.class_weights_ = (len(y_all) / (len(classes) * counts)).astype(
+                np.float64
+            )
         else:
             self.class_weights_ = np.ones(len(classes), dtype=np.float64)
 
@@ -248,7 +260,8 @@ class IncrementalRidgeClassifier(Classifier):
     def finalize_fit(self) -> IncrementalRidgeClassifier:
         if (
             self._gram is None
-            or self._wx_sum is not None and self._w_sum is None
+            or self._wx_sum is not None
+            and self._w_sum is None
             or self.classes_ is None
         ):
             raise ValueError("No batches were accumulated before calling finalize_fit.")
@@ -308,7 +321,11 @@ class IncrementalRidgeClassifier(Classifier):
     def _build_rhs(
         self, w_total: float, x_mean: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        assert self._wx_sum is not None and self._w_sum is not None and self.classes_ is not None
+        assert (
+            self._wx_sum is not None
+            and self._w_sum is not None
+            and self.classes_ is not None
+        )
         n_classes = len(self.classes_)
         n_features = x_mean.shape[0]
 
@@ -340,11 +357,19 @@ class IncrementalRidgeClassifier(Classifier):
             warnings.simplefilter("ignore", scipy.linalg.LinAlgWarning)
             try:
                 W = scipy.linalg.solve(
-                    self._gram, B, assume_a="pos", overwrite_a=overwrite_gram, overwrite_b=False
+                    self._gram,
+                    B,
+                    assume_a="pos",
+                    overwrite_a=overwrite_gram,
+                    overwrite_b=False,
                 )
             except scipy.linalg.LinAlgError:
                 W = scipy.linalg.solve(
-                    self._gram, B, assume_a="sym", overwrite_a=overwrite_gram, overwrite_b=False
+                    self._gram,
+                    B,
+                    assume_a="sym",
+                    overwrite_a=overwrite_gram,
+                    overwrite_b=False,
                 )
             finally:
                 if not overwrite_gram:
@@ -368,7 +393,9 @@ class IncrementalRidgeClassifier(Classifier):
 
     def predict(self, X: np.ndarray) -> int | np.ndarray:
         if self.coef_ is None or self.intercept_ is None or self.classes_ is None:
-            raise ValueError("IncrementalRidgeClassifier must be fitted before calling predict.")
+            raise ValueError(
+                "IncrementalRidgeClassifier must be fitted before calling predict."
+            )
 
         is_single = X.ndim == 1
         X_f32 = np.asarray(X[np.newaxis, :] if is_single else X, dtype=np.float32)

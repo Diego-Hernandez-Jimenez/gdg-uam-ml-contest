@@ -56,7 +56,9 @@ class TimeSeriesPipeline:
         classes = np.unique(y)
 
         # 1. Fit preprocessing and sub-extractors on a representative subset
-        subset_idx = rng.choice(n_samples, size=min(batch_size, n_samples), replace=False)
+        subset_idx = rng.choice(
+            n_samples, size=min(batch_size, n_samples), replace=False
+        )
         X_sub_clean = self.preprocessing.fit(X[subset_idx]).transform(X[subset_idx])
         if hasattr(self.feature_extractor, "fit_extractors"):
             self.feature_extractor.fit_extractors(X_sub_clean)
@@ -67,7 +69,9 @@ class TimeSeriesPipeline:
         # Pass 1: Compute exact global feature mean & std across all mini-batches
         if getattr(self.feature_extractor, "scale_features", False):
             for start in range(0, n_samples, batch_size):
-                X_b = self.preprocessing.transform(X[start : min(start + batch_size, n_samples)])
+                X_b = self.preprocessing.transform(
+                    X[start : min(start + batch_size, n_samples)]
+                )
                 self.feature_extractor.partial_fit_scaler(X_b)
             self.feature_extractor.finalize_scaler()
 
@@ -76,7 +80,9 @@ class TimeSeriesPipeline:
             if hasattr(self.classifier, "set_class_weights_from_labels"):
                 self.classifier.set_class_weights_from_labels(y)
 
-            effective_epochs = 1 if hasattr(self.classifier, "finalize_fit") else n_epochs
+            effective_epochs = (
+                1 if hasattr(self.classifier, "finalize_fit") else n_epochs
+            )
             for _ in range(effective_epochs):
                 perm = rng.permutation(n_samples)
                 for start in range(0, n_samples, batch_size):
@@ -90,7 +96,9 @@ class TimeSeriesPipeline:
             return self
 
         # 3. Fallback for RidgeClassifier: extract globally standardized features in chunks
-        first_feats = self.feature_extractor.transform(self.preprocessing.transform(X[:1]))
+        first_feats = self.feature_extractor.transform(
+            self.preprocessing.transform(X[:1])
+        )
         X_feats_all = np.empty((n_samples, first_feats.shape[1]), dtype=np.float32)
 
         for start in range(0, n_samples, batch_size):

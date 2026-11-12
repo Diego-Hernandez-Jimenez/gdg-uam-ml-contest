@@ -100,7 +100,9 @@ def train_and_evaluate(
     # 1. Cross-Validation (if cv_folds > 1) using Out-Of-Fold predictions
     cv_metrics = None
     if config.training.cv_folds and config.training.cv_folds > 1:
-        skf = StratifiedKFold(n_splits=config.training.cv_folds, shuffle=True, random_state=42)
+        skf = StratifiedKFold(
+            n_splits=config.training.cv_folds, shuffle=True, random_state=42
+        )
         oof_preds = np.full(len(y), ABSTAIN, dtype=int)
         for train_idx, val_idx in skf.split(X, y):
             fold_model = build_pipeline(config)
@@ -112,10 +114,12 @@ def train_and_evaluate(
             )
             oof_preds[val_idx] = fold_model.predict(X[val_idx])
         cv_metrics = compute_metrics(y, oof_preds)
-        
+
     # 2. Fit final model on 100% of the dataset
     final_model = build_pipeline(config)
-    final_model.fit(X, y, batch_size=config.training.batch_size, n_epochs=config.training.epochs)
+    final_model.fit(
+        X, y, batch_size=config.training.batch_size, n_epochs=config.training.epochs
+    )
 
     train_preds = final_model.predict(X)
     train_metrics = compute_metrics(y, train_preds)

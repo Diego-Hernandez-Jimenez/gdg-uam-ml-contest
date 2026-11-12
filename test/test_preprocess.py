@@ -40,8 +40,8 @@ def setup_synthetic_npz_file():
     # Channel 3: Random Gaussian noise
     ch3 = np.random.randn(256)
 
-    # Stack to create shape (4, 256)
-    synthetic_data = np.vstack([ch0, ch1, ch2, ch3])
+    # Stack to create shape (4, 256) in float32 matching pipeline precision
+    synthetic_data = np.vstack([ch0, ch1, ch2, ch3]).astype(np.float32)
 
     # Save the synthetic data inside the test directory
     filepath = os.path.join(os.path.dirname(__file__), "synthetic_test_data.npz")
@@ -79,12 +79,15 @@ def test_nan_interpolation(test_data):
     transformed = step.transform(test_data)
 
     assert transformed.shape == (4, 256)
+    assert transformed.dtype == np.float32
     # Assert no NaNs remain in the output array
     assert not np.isnan(transformed).any()
 
-    # Assert that non-NaN original values remain intact
+    # Assert that non-NaN original values remain intact (in float32 precision)
     valid_mask = ~np.isnan(test_data)
-    np.testing.assert_array_equal(transformed[valid_mask], test_data[valid_mask])
+    np.testing.assert_array_equal(
+        transformed[valid_mask], test_data[valid_mask].astype(np.float32)
+    )
 
 
 def test_hampel_filter(test_data):
