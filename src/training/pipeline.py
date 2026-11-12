@@ -61,8 +61,11 @@ class TimeSeriesPipeline:
         self.feature_extractor.fit(X_sub_clean)
         del X_sub_clean
 
-        # 2. If classifier supports incremental learning (SGD or IncrementalRidgeClassifier)
+                # 2. If classifier supports incremental learning (SGD or IncrementalRidgeClassifier)
         if hasattr(self.classifier, "partial_fit_scaler") and hasattr(self.classifier, "partial_fit_model"):
+            if hasattr(self.classifier, "set_class_weights_from_labels"):
+                self.classifier.set_class_weights_from_labels(y)
+
             # Pass 1: Compute exact global mean & std across mini-batches (if normalize_features=True)
             if getattr(self.classifier, "normalize_features", False):
                 for start in range(0, n_samples, batch_size):
