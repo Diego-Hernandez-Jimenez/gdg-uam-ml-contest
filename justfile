@@ -8,13 +8,13 @@ root := justfile_directory()
 
 train data_file model_config:
     uv run --project {{root}} \
-    python -m src.train --data data/{{data_file}}.npz --config configs/experiments/{{model_config}}.yaml
+    python -m src.train --data data/{{data_file}}.npz --config configs/{{model_config}}.yaml
 
 eval data_file="test_demo" model_path="artifacts/latest":
     @echo "Evaluating model {{model_path}} on data {{data_file}}..."
     @export MODEL_WEIGHTS="{{root}}/{{model_path}}.joblib"
     uv run --project {{root}} \
-        python harness.py evaluate --model model.py --source file:data/{{data_file}}.npz 
+        python harness.py evaluate --model model.py --source file:data/{{data_file}}.npz
 
 clean:
 	@echo "Cleaning cache files..."
@@ -33,3 +33,6 @@ test target_test="":
     else
         uv run --project {{root}} pytest -vv
     fi
+
+deps:
+    cd {{root}} &&uv export --format requirements-txt --output-file requirements.txt

@@ -3,9 +3,12 @@ data/
 # local outputs
 results/
 __pycache__/
-artifacts/
-configs/experiments/
+artifacts/metrics/
+artifacts/parameters/
+configs/*
+!configs/minirocket.yaml
 scripts/
+
 
 # the rest of contest materials
 examples/

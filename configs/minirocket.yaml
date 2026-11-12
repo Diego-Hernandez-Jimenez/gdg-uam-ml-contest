@@ -1,0 +1,26 @@
+name: minirocket2500-full
+
+preprocessing:
+  steps:
+    - nan_interpolation
+    - hampel:
+        window: 5
+        n_sigmas: 3.0
+
+feature_extractor:
+  components:
+    - baseline
+    - summary_stats
+    - minirocket: 
+        num_features: 2500
+  normalize_features: true
+
+classifier:
+  model: ridge
+  confidence_threshold: null
+  noise_threshold: 3.5
+  
+training:
+  cv_folds: null
+  batch_size: null
+  epochs: null

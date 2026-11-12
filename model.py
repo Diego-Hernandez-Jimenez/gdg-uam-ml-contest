@@ -18,6 +18,7 @@ class Model:
         self.pipeline = joblib.load(weights_path)
 
     def predict(self, x: Sample) -> int:
-        # x.series is a read-only float32 array of shape (4, 256)
-        # series = np.asarray(x.series, dtype=np.float64)
         return int(self.pipeline.predict(x.series))
+
+model = Model()
+print(f"ridge alpha: {model.pipeline.classifier.model_.alpha_}")
