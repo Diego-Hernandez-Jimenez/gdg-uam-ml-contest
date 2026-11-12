@@ -10,7 +10,7 @@ train data_file model_config:
     uv run --project {{root}} \
     python -m src.train --data data/{{data_file}}.npz --config configs/experiments/{{model_config}}.yaml
 
-eval model_path="artifacts/latest" data_file="test_demo":
+eval data_file="test_demo" model_path="artifacts/latest":
     @echo "Evaluating model {{model_path}} on data {{data_file}}..."
     @export MODEL_WEIGHTS="{{root}}/{{model_path}}.joblib"
     uv run --project {{root}} \
