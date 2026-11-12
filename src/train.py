@@ -91,36 +91,37 @@ def train_and_evaluate(
     """Run optional CV evaluation, fit final model on full data, and export artifacts."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts_path = Path(config.artifacts_dir)
+    params_dir = artifacts_path / "parameters"
     metrics_dir = artifacts_path / "metrics"
     artifacts_path.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
+    params_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Cross-Validation (if cv_folds > 1) using Out-Of-Fold predictions
     cv_metrics = None
-    if config.cv_folds and config.cv_folds > 1:
-        skf = StratifiedKFold(n_splits=config.cv_folds, shuffle=True, random_state=42)
+    if config.training.cv_folds and config.training.cv_folds > 1:
+        skf = StratifiedKFold(n_splits=config.training.cv_folds, shuffle=True, random_state=42)
         oof_preds = np.full(len(y), ABSTAIN, dtype=int)
-
         for train_idx, val_idx in skf.split(X, y):
             fold_model = build_pipeline(config)
             fold_model.fit(
                 X[train_idx],
                 y[train_idx],
-                batch_size=config.batch_size,
-                n_epochs=config.epochs,
+                batch_size=config.training.batch_size,
+                n_epochs=config.training.epochs,
             )
             oof_preds[val_idx] = fold_model.predict(X[val_idx])
-
         cv_metrics = compute_metrics(y, oof_preds)
-
+        
     # 2. Fit final model on 100% of the dataset
     final_model = build_pipeline(config)
-    final_model.fit(X, y, batch_size=config.batch_size, n_epochs=config.epochs)
+    final_model.fit(X, y, batch_size=config.training.batch_size, n_epochs=config.training.epochs)
+
     train_preds = final_model.predict(X)
     train_metrics = compute_metrics(y, train_preds)
 
     # 3. Save model artifacts (.joblib)
-    params_path = artifacts_path / f"params_{config.name}_{timestamp}.joblib"
+    params_path = params_dir / f"{config.name}_{timestamp}.joblib"
     latest_model_path = artifacts_path / f"latest_{config.name}.joblib"
     latest_default_path = artifacts_path / "latest.joblib"
 

@@ -50,48 +50,84 @@ CLASSIFIER_MAP: dict[str, type] = {
 
 
 @dataclass
+class PreprocessingConfig:
+    """Preprocessing stage: ordered list of cleaning/filtering steps."""
+
+    steps: list[str | dict[str, Any]] = field(
+        default_factory=lambda: ["nan_interpolation"]
+    )
+
+
+@dataclass
+class FeatureExtractorConfig:
+    """Feature extraction stage: components to compute, optionally unioned."""
+
+    components: str | list[str | dict[str, Any]] = "minirocket"
+    normalize_features: bool = False
+
+
+@dataclass
+class ClassifierConfig:
+    """Classifier stage: model choice and its hyperparameters."""
+
+    model: str = "ridge"
+    confidence_threshold: float | None = None
+    normalize_features: bool = False
+    noise_threshold: float | None = None
+
+
+@dataclass
+class TrainingConfig:
+    """Training loop controls: batching, epochs and cross-validation."""
+
+    cv_folds: int | None = None
+    batch_size: int | None = None
+    epochs: int = 3
+
+
+@dataclass
 class TrainConfig:
     """Configuration contract for training pipeline and workflow."""
 
     name: str
-    preprocessing: list[str | dict[str, Any]] = field(
-        default_factory=lambda: ["nan_interpolation"]
+    preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
+    feature_extractor: FeatureExtractorConfig = field(
+        default_factory=FeatureExtractorConfig
     )
-    feature_extractor: str | list[str | dict[str, Any]] = "minirocket"
-    num_features: int = 1000
-    classifier: str = "ridge"
-    confidence_threshold: float | None = None
-    normalize_features: bool = False
-    noise_threshold: float | None = None
-    cv_folds: int | None = None
-    batch_size: int | None = None
-    epochs: int = 3
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
     artifacts_dir: str = "artifacts"
 
     def __post_init__(self) -> None:
-        if self.classifier not in ("sgd", "incremental_ridge", "ridge") and (
-            self.batch_size is not None or self.epochs != 3
+        if self.classifier.model not in ("sgd", "incremental_ridge", "ridge") and (
+            self.training.batch_size is not None or self.training.epochs != 3
         ):
             raise ValueError(
                 "batch_size and epochs are only valid with 'sgd', 'ridge', or 'incremental_ridge'."
             )
-
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> TrainConfig:
         """Load configuration from a YAML file."""
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        return cls(**data)
+        return cls(
+            name=data["name"],
+            preprocessing=PreprocessingConfig(**(data.get("preprocessing") or {})),
+            feature_extractor=FeatureExtractorConfig(
+                **(data.get("feature_extractor") or {})
+            ),
+            classifier=ClassifierConfig(**(data.get("classifier") or {})),
+            training=TrainingConfig(**(data.get("training") or {})),
+            artifacts_dir=data.get("artifacts_dir", "artifacts"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize configuration to dictionary."""
         return asdict(self)
 
 
-def _instantiate_single_extractor(
-    spec: str | dict[str, Any], default_num_features: int
-) -> FeatureExtractor:
+def _instantiate_single_extractor(spec: str | dict[str, Any]) -> FeatureExtractor:
     """Helper to instantiate a single FeatureExtractor from string or dict spec."""
     if isinstance(spec, str):
         name, params = spec, {}
@@ -100,67 +136,55 @@ def _instantiate_single_extractor(
         params = params or {}
     else:
         raise TypeError(f"Invalid feature extractor specification: {spec}")
-
-    fe_cls = FEATURE_MAP[name]
-    if name in ("minirocket", "multirocket") and "num_features" not in params:
-        params["num_features"] = default_num_features
-
-    return fe_cls(**params)
+    return FEATURE_MAP[name](**params)
 
 
 def build_pipeline(config: TrainConfig) -> TimeSeriesPipeline:
     """Instantiate a TimeSeriesPipeline from a TrainConfig contract."""
     # 1. Build Preprocessing Steps
     steps = []
-    for step in config.preprocessing:
+    for step in config.preprocessing.steps:
         if isinstance(step, str):
             steps.append(PREPROCESSING_MAP[step]())
         elif isinstance(step, dict):
             name, params = next(iter(step.items()))
             steps.append(PREPROCESSING_MAP[name](**(params or {})))
-
     # 2. Build Feature Extractor (Single or FeatureUnion if length > 1)
     fe_specs = (
-        [config.feature_extractor]
-        if isinstance(config.feature_extractor, str)
-        else config.feature_extractor
+        [config.feature_extractor.components]
+        if isinstance(config.feature_extractor.components, str)
+        else config.feature_extractor.components
     )
-    extractors = [
-        _instantiate_single_extractor(spec, config.num_features)
-        for spec in fe_specs
-    ]
-
+    extractors = [_instantiate_single_extractor(spec) for spec in fe_specs]
     if len(extractors) > 1:
         feature_extractor: FeatureExtractor = FeatureUnion(
             extractors=extractors,
-            scale_features=config.normalize_features,
+            scale_features=config.feature_extractor.normalize_features,
         )
     else:
         feature_extractor = extractors[0]
-
     # 3. Build Classifier
-    clf_cls = CLASSIFIER_MAP[config.classifier]
-    if config.classifier == "dummy":
+    clf_cls = CLASSIFIER_MAP[config.classifier.model]
+    if config.classifier.model == "dummy":
         classifier = clf_cls()
-    elif config.classifier == "ridge":
+    elif config.classifier.model == "ridge":
         classifier = clf_cls(
-            confidence_threshold=config.confidence_threshold,
+            confidence_threshold=config.classifier.confidence_threshold,
             # Avoid double scaling if FeatureUnion already scaled the features
             normalize_features=(
-                config.normalize_features and len(extractors) == 1
+                config.classifier.normalize_features
             ),
         )
     else:
         classifier = clf_cls(
-            confidence_threshold=config.confidence_threshold,
+            confidence_threshold=config.classifier.confidence_threshold,
             normalize_features=(
-                config.normalize_features and len(extractors) == 1
+                config.classifier.normalize_features
             ),
         )
-
     return TimeSeriesPipeline(
         preprocessing_steps=steps,
         feature_extractor=feature_extractor,
         classifier=classifier,
-        noise_threshold=config.noise_threshold,
+        noise_threshold=config.classifier.noise_threshold,
     )
