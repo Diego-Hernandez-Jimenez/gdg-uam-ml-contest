@@ -44,10 +44,10 @@ class TimeSeriesPipeline:
         """Fit pipeline in full-batch mode or memory-safe mini-batch mode."""
         n_samples = X.shape[0]
 
-        # Standard full-batch in-memory path
+        # Standard full-batch in-memory path (single feature extraction pass via fit_transform)
         if batch_size is None or n_samples <= batch_size:
             X_clean = self.preprocessing.fit(X).transform(X)
-            X_feats = self.feature_extractor.fit(X_clean).transform(X_clean)
+            X_feats = self.feature_extractor.fit_transform(X_clean)
             self.classifier.fit(X_feats, y)
             return self
 
@@ -55,26 +55,27 @@ class TimeSeriesPipeline:
         rng = np.random.default_rng(42)
         classes = np.unique(y)
 
-        # 1. Fit feature extractor on a representative subset
+        # 1. Fit preprocessing and sub-extractors on a representative subset
         subset_idx = rng.choice(n_samples, size=min(batch_size, n_samples), replace=False)
         X_sub_clean = self.preprocessing.fit(X[subset_idx]).transform(X[subset_idx])
-        self.feature_extractor.fit(X_sub_clean)
+        if hasattr(self.feature_extractor, "fit_extractors"):
+            self.feature_extractor.fit_extractors(X_sub_clean)
+        else:
+            self.feature_extractor.fit(X_sub_clean)
         del X_sub_clean
 
-                # 2. If classifier supports incremental learning (SGD or IncrementalRidgeClassifier)
-        if hasattr(self.classifier, "partial_fit_scaler") and hasattr(self.classifier, "partial_fit_model"):
+        # Pass 1: Compute exact global feature mean & std across all mini-batches
+        if getattr(self.feature_extractor, "scale_features", False):
+            for start in range(0, n_samples, batch_size):
+                X_b = self.preprocessing.transform(X[start : min(start + batch_size, n_samples)])
+                self.feature_extractor.partial_fit_scaler(X_b)
+            self.feature_extractor.finalize_scaler()
+
+        # 2. If classifier supports incremental learning (SGD or IncrementalRidgeClassifier)
+        if hasattr(self.classifier, "partial_fit_model"):
             if hasattr(self.classifier, "set_class_weights_from_labels"):
                 self.classifier.set_class_weights_from_labels(y)
 
-            # Pass 1: Compute exact global mean & std across mini-batches (if normalize_features=True)
-            if getattr(self.classifier, "normalize_features", False):
-                for start in range(0, n_samples, batch_size):
-                    end = min(start + batch_size, n_samples)
-                    X_b = self.preprocessing.transform(X[start:end])
-                    feats_b = self.feature_extractor.transform(X_b)
-                    self.classifier.partial_fit_scaler(feats_b)
-
-            # Pass 2: Single pass for exact closed-form solvers (IncrementalRidge), or n_epochs for SGD
             effective_epochs = 1 if hasattr(self.classifier, "finalize_fit") else n_epochs
             for _ in range(effective_epochs):
                 perm = rng.permutation(n_samples)
@@ -88,11 +89,9 @@ class TimeSeriesPipeline:
                 self.classifier.finalize_fit()
             return self
 
-
-        # 3. Fallback for RidgeClassifier: extract features in chunks to save preprocessing RAM
+        # 3. Fallback for RidgeClassifier: extract globally standardized features in chunks
         first_feats = self.feature_extractor.transform(self.preprocessing.transform(X[:1]))
-        n_features = first_feats.shape[1]
-        X_feats_all = np.empty((n_samples, n_features), dtype=np.float32)
+        X_feats_all = np.empty((n_samples, first_feats.shape[1]), dtype=np.float32)
 
         for start in range(0, n_samples, batch_size):
             end = min(start + batch_size, n_samples)
@@ -101,7 +100,6 @@ class TimeSeriesPipeline:
 
         self.classifier.fit(X_feats_all, y)
         return self
-
 
     def predict(self, X: np.ndarray) -> int | np.ndarray:
         """Predict on a single sample (C, L) or a batch (N, C, L)."""

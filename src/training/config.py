@@ -60,10 +60,10 @@ class PreprocessingConfig:
 
 @dataclass
 class FeatureExtractorConfig:
-    """Feature extraction stage: components to compute, optionally unioned."""
+    """Feature extraction stage: components to compute and standardize."""
 
     components: str | list[str | dict[str, Any]] = "minirocket"
-    normalize_features: bool = False
+    normalize_features: bool = True
 
 
 @dataclass
@@ -72,7 +72,6 @@ class ClassifierConfig:
 
     model: str = "ridge"
     confidence_threshold: float | None = None
-    normalize_features: bool = False
     noise_threshold: float | None = None
 
 
@@ -111,6 +110,7 @@ class TrainConfig:
         """Load configuration from a YAML file."""
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
+
         return cls(
             name=data["name"],
             preprocessing=PreprocessingConfig(**(data.get("preprocessing") or {})),
@@ -136,6 +136,7 @@ def _instantiate_single_extractor(spec: str | dict[str, Any]) -> FeatureExtracto
         params = params or {}
     else:
         raise TypeError(f"Invalid feature extractor specification: {spec}")
+
     return FEATURE_MAP[name](**params)
 
 
@@ -149,39 +150,31 @@ def build_pipeline(config: TrainConfig) -> TimeSeriesPipeline:
         elif isinstance(step, dict):
             name, params = next(iter(step.items()))
             steps.append(PREPROCESSING_MAP[name](**(params or {})))
-    # 2. Build Feature Extractor (Single or FeatureUnion if length > 1)
+
+    # 2. Build Feature Extractor (wrap in FeatureUnion if multiple or if normalization is enabled)
     fe_specs = (
         [config.feature_extractor.components]
         if isinstance(config.feature_extractor.components, str)
         else config.feature_extractor.components
     )
     extractors = [_instantiate_single_extractor(spec) for spec in fe_specs]
-    if len(extractors) > 1:
+
+    if len(extractors) > 1 or config.feature_extractor.normalize_features:
         feature_extractor: FeatureExtractor = FeatureUnion(
             extractors=extractors,
             scale_features=config.feature_extractor.normalize_features,
         )
     else:
         feature_extractor = extractors[0]
+
     # 3. Build Classifier
     clf_cls = CLASSIFIER_MAP[config.classifier.model]
-    if config.classifier.model == "dummy":
-        classifier = clf_cls()
-    elif config.classifier.model == "ridge":
-        classifier = clf_cls(
-            confidence_threshold=config.classifier.confidence_threshold,
-            # Avoid double scaling if FeatureUnion already scaled the features
-            normalize_features=(
-                config.classifier.normalize_features
-            ),
-        )
-    else:
-        classifier = clf_cls(
-            confidence_threshold=config.classifier.confidence_threshold,
-            normalize_features=(
-                config.classifier.normalize_features
-            ),
-        )
+    classifier = (
+        clf_cls()
+        if config.classifier.model == "dummy"
+        else clf_cls(confidence_threshold=config.classifier.confidence_threshold)
+    )
+
     return TimeSeriesPipeline(
         preprocessing_steps=steps,
         feature_extractor=feature_extractor,
